@@ -31,7 +31,7 @@ export async function runScript(browser: Browser, code: string, cwd: string, tim
     scroll: track("scroll", async (dir = "down", px = 600, on?: string) => browser.scroll(dir, px, on)),
     text: track("text", async (t?: string, max = 4000) => browser.text(t, max)),
     js: track("js", async (expr: string) => browser.evaluate(expr)),
-    snapshot: track("snapshot", async (o: { interactive?: boolean; maxLines?: number } = {}) => browser.snapshot(o)),
+    snapshot: track("snapshot", async (o: { interactive?: boolean; maxLines?: number; diff?: boolean } = {}) => browser.snapshot(o)),
     exists: track("exists", async (t: string) => { try { await browser.resolve(t); return true; } catch { return false; } }),
     url: async () => (await browser.info()).url,
     title: async () => (await browser.info()).title,

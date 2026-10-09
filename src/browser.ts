@@ -1,6 +1,7 @@
 // Browser session: one CDP connection, a current tab, refs, and the action primitives.
 import { CDP } from "./cdp.js";
 import { launchChrome, resolveCdpEndpoint, cleanupProfile, type LaunchedChrome } from "./chrome.js";
+import { renderDiff } from "./diff.js";
 import { takeSnapshot, newRefTable, type RefTable, type SnapshotOptions } from "./snapshot.js";
 import { KEYS, modifierBit } from "./keys.js";
 
@@ -13,6 +14,7 @@ export type BrowserOptions = {
 type Tab = {
   targetId: string; sessionId: string; refs: RefTable; inflight: Set<string>; lastNet: number; url: string; title: string;
   mainFrame?: string; navAt: number; loadAt: number;
+  last?: { key: string; lines: string[] };
 };
 
 const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", media: "Media", stylesheet: "Stylesheet", css: "Stylesheet" };
@@ -164,21 +166,36 @@ export class Browser {
   }
 
   async evaluate(expression: string, awaitPromise = true) {
-    const src = /^\s*(return\b|await\b|const\b|let\b|for\b|if\b)/.test(expression) || /;\s*\S/.test(expression)
-      ? `(async () => { ${/\breturn\b/.test(expression) || /^\s*(const|let|for|if)\b/.test(expression) ? expression : `return (${expression})`} })()`
+    // `return …` → async function body; a lone `await` expression → async arrow; anything else is evaluated
+    // as-is (statements evaluate to their last expression, like the devtools console).
+    const src = /\breturn\b/.test(expression) ? `(async () => { ${expression} })()`
+      : /\bawait\b/.test(expression) && !/;\s*\S/.test(expression) ? `(async () => (${expression.replace(/;\s*$/, "")}))()`
+      : /\bawait\b/.test(expression) ? `(async () => { ${expression} })()`
       : expression;
     const r: any = await this.send("Runtime.evaluate", { expression: src, awaitPromise, returnByValue: true, userGesture: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result?.value;
   }
 
-  async snapshot(opts: SnapshotOptions = {}) {
+  /** Snapshot; with `diff`, only lines that changed since this tab's previous snapshot of the same page. */
+  async snapshot(opts: SnapshotOptions & { diff?: boolean } = {}) {
     const tab = this.tab();
     const res = await takeSnapshot(this.cdp, tab.sessionId, tab.refs, opts);
     const { url, title } = await this.info();
     const extra: string[] = [];
     if (this.dialogs.length) extra.push(`dialogs: ${this.dialogs.splice(0).join(" | ")}`);
-    return `# ${title} — ${url}\n${extra.length ? extra.join("\n") + "\n" : ""}${res.text}`;
+    const head = `# ${title} — ${url}\n${extra.length ? extra.join("\n") + "\n" : ""}`;
+    const key = `${url}|${opts.interactive ? "i" : "f"}`;
+    const lines = res.text.split("\n");
+    const prev = tab.last?.key === key ? tab.last.lines : undefined;
+    tab.last = { key, lines };
+    if (opts.diff && prev) {
+      const d = renderDiff(prev, lines);
+      if (!d.added && !d.removed) return `${head}(no changes since last snapshot)`;
+      if (d.text.length < res.text.length * 0.7)
+        return `${head}(diff vs last snapshot: +${d.added} -${d.removed}, ${d.same} unchanged)\n${d.text}`;
+    }
+    return head + res.text;
   }
 
   /**

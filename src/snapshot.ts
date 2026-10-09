@@ -188,7 +188,7 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
       let line = `${pad}- ${shownRole}${label ? ` "${clip(label, maxText)}"` : ""} @${r}`;
       if (val !== undefined && val !== "" && role !== "link") line += ` value="${clip(norm(val), maxText)}"`;
       if (info?.href) line += ` ${info.href}`;
-      const st = props(n);
+      const st = props(n).filter((x) => x !== "focused");
       if (st.length) line += ` [${st.join(", ")}]`;
       lines.push(line);
       // Children of a named control are usually its label text; skip them unless they are interactive.
@@ -217,7 +217,7 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
 
     if (STRUCTURAL_KEEP.has(role) || (!TRANSPARENT_ROLES.has(role) && name)) {
       if (!name && ["list", "row", "group"].includes(role) && (n.childIds?.length ?? 0) <= 1) return kids();
-      const st = props(n);
+      const st = props(n).filter((x) => x !== "focused");
       lines.push(`${pad}- ${role}${name ? ` "${clip(name, maxText)}"` : ""}${st.length ? ` [${st.join(", ")}]` : ""}`);
       return kidsDeeper(childInPointer);
     }
