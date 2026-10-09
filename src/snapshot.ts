@@ -18,7 +18,7 @@ export const elKey = (e: El) => `${e.sid}:${e.bid}`;
 
 export type RefTable = {
   byBackend: Map<string, number>;
-  byRef: Map<number, { el: El; role: string; name: string }>;
+  byRef: Map<number, { el: El; role: string; name: string; ord?: number }>; // ord: index among same role+name, for healing
   next: number;
 };
 export const newRefTable = (): RefTable => ({ byBackend: new Map(), byRef: new Map(), next: 1 });
@@ -137,12 +137,15 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
   const lines: string[] = [];
   let refCount = 0;
 
+  const ords = new Map<string, number>();
   const refFor = (backendNodeId: number, role: string, name: string) => {
     const el: El = { sid: curSid, bid: backendNodeId, owner: curOwner };
     const key = elKey(el);
     let r = refs.byBackend.get(key);
     if (!r) { r = refs.next++; refs.byBackend.set(key, r); }
-    refs.byRef.set(r, { el, role, name });
+    const ok = `${curSid}|${role}|${name}`;
+    const ord = ords.get(ok) ?? 0; ords.set(ok, ord + 1);
+    refs.byRef.set(r, { el, role, name, ord });
     refCount++;
     return r;
   };

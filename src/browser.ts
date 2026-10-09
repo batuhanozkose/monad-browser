@@ -13,7 +13,7 @@ export type BrowserOptions = {
 
 type Tab = {
   targetId: string; sessionId: string; refs: RefTable; inflight: Map<string, number>; lastNet: number; url: string; title: string;
-  mainFrame?: string; navAt: number; loadAt: number;
+  mainFrame?: string; navAt: number; loadAt: number; fullLoadAt: number;
   oopifs: Map<string, string>; // out-of-process iframe frameId → its CDP session
   last?: { key: string; lines: string[] };
 };
@@ -79,7 +79,7 @@ export class Browser {
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0, oopifs: new Map() };
+    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map() };
     this.tabs.set(targetId, tab);
     const s = sessionId;
     const on = (ev: string, fn: (p: any) => void) => this.cdp.on(ev, (p, sid) => { if (sid === s) fn(p); });
@@ -98,7 +98,11 @@ export class Browser {
     on("Page.frameRequestedNavigation", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
     on("Page.frameStartedLoading", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
     // Ready = DOM parsed (DOMContentLoaded) plus a quiet window for scripts/XHR; images and fonts are not waited for.
-    on("Page.lifecycleEvent", (p) => { if (p.name === "DOMContentLoaded" && (!tab.mainFrame || p.frameId === tab.mainFrame)) tab.loadAt = Date.now(); });
+    on("Page.lifecycleEvent", (p) => {
+      if (tab.mainFrame && p.frameId !== tab.mainFrame) return;
+      if (p.name === "DOMContentLoaded") tab.loadAt = Date.now();
+      else if (p.name === "load") tab.fullLoadAt = Date.now();
+    });
     on("Page.navigatedWithinDocument", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.url = p.url; });
     on("Page.javascriptDialogOpening", async (p) => {
       this.dialogs.push(`${p.type}: ${p.message}`);
@@ -171,19 +175,30 @@ export class Browser {
   send<T = any>(method: string, params: object = {}) { return this.cdp.send<T>(method, params, this.tab().sessionId); }
 
   /** Wait until no tracked requests are in flight for `idleMs`, capped at `timeoutMs`. */
+  /** After DOMContentLoaded: done at the load event or at 50 ms of script/XHR quiet, whichever comes first (cap 1 s). */
+  private async pageReady(navStart: number) {
+    const tab = this.tab();
+    const end = Date.now() + 1000;
+    while (Date.now() < end) {
+      if (tab.fullLoadAt >= navStart) return;
+      if (await this.networkIdle(50, 0)) return;
+      await sleep(10);
+    }
+  }
+
   async networkIdle(idleMs = 400, timeoutMs = 5000, since = 0) {
     const tab = this.tab();
     const end = Date.now() + timeoutMs;
-    while (Date.now() < end) {
+    while (true) {
       // Requests pending for > STALE_MS are long-polls, beacons or leaked ids: they never block settling.
       const now = Date.now();
       let active = 0;
       for (const [id, t] of tab.inflight) { if (now - t > 30_000) tab.inflight.delete(id); else if (now - t < STALE_MS) active++; }
       // Traffic that predates the action (since) needs no quiet window of its own.
       if (active === 0 && (tab.lastNet < since || now - tab.lastNet >= idleMs)) return true;
+      if (now >= end) return false;
       await sleep(15);
     }
-    return false;
   }
 
   async goto(url: string, opts: { timeoutMs?: number } = {}) {
@@ -195,8 +210,7 @@ export class Browser {
     if (res.errorText) throw new Error(`navigation failed: ${res.errorText} (${url})`);
     const end = since + timeoutMs;
     while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(10);
-    // After DOMContentLoaded allow up to 1 s of script/XHR quiet; ad and analytics chatter must not stall every goto.
-    await this.networkIdle(50, 1000);
+    await this.pageReady(since);
     tab.refs = newRefTable();
     return this.info();
   }
@@ -277,10 +291,16 @@ export class Browser {
       if (!ref) throw new Error(`unknown ref @${n} — take a fresh snapshot`);
       if (!verify || await this.isAttached(ref.el)) return ref.el;
       // Self-heal by role + name (top document only).
-      const healed = ref.name && !ref.el.owner ? await this.queryAX(ref.name, ref.role === "clickable" ? undefined : ref.role) : [];
-      if (healed.length === 1) {
+      let healed = ref.name && !ref.el.owner ? await this.queryAX(ref.name, ref.role === "clickable" ? undefined : ref.role) : [];
+      // Hydration often upgrades a text field's role (searchbox → combobox): try its siblings in the family.
+      const TEXT_ROLES = ["textbox", "searchbox", "combobox"];
+      if (!healed.length && ref.name && !ref.el.owner && TEXT_ROLES.includes(ref.role))
+        for (const r of TEXT_ROLES) if (r !== ref.role && (healed = await this.queryAX(ref.name, r)).length) break;
+      // One match: that is it. Several (a re-render can duplicate names): the same position among them as at snapshot time.
+      const pick = healed.length === 1 ? healed[0] : healed.length > 1 && ref.ord !== undefined ? healed[ref.ord] : undefined;
+      if (pick !== undefined) {
         tab.refs.byBackend.delete(elKey(ref.el));
-        ref.el = top(healed[0]);
+        ref.el = top(pick);
         tab.refs.byBackend.set(elKey(ref.el), n);
         return ref.el;
       }
@@ -391,6 +411,8 @@ export class Browser {
     const end = Date.now() + (opts.timeoutMs ?? this.actionTimeout);
     let reason = "not found";
     let scrolled = false;
+    // A page still loading scripts may be about to hydrate (and replace) the target: give it up to 500 ms of quiet first.
+    await this.networkIdle(50, 500);
     let verify = false; // refs are trusted first (saves two round trips); a detached node takes the self-healing path
     while (true) {
       try {
@@ -452,7 +474,7 @@ export class Browser {
   /**
    * After an action: if it started a main-frame navigation (now or within the quiet window), wait for the new
    * document's DOMContentLoaded plus a short quiet window; otherwise wait until the action's own traffic settles.
-   * An action that causes nothing returns after a 20 ms grace period, long enough for submit handlers to navigate.
+   * An action that causes nothing returns after one 10 ms tick: navigations an input starts are reported before the input command returns.
    */
   async settle(since: number) {
     const tab = this.tab();
@@ -463,18 +485,18 @@ export class Browser {
         const navEnd = Date.now() + 15_000;
         while (tab.loadAt < tab.navAt && Date.now() < navEnd) await sleep(10);
         tab.refs = newRefTable();
-        await this.networkIdle(50, 1000);
+        await this.pageReady(tab.navAt);
         return;
       }
       const now = Date.now();
       let active = 0;
       for (const [, t] of tab.inflight) if (t >= since && now - t < STALE_MS) active++;
       const last = Math.max(since, tab.lastNet);
-      if (active === 0 && now - last >= (tab.lastNet >= since ? 150 : 20)) return;
+      if (active === 0 && now - last >= (tab.lastNet >= since ? 150 : 0)) return;
     }
   }
 
-  async fill(target: string, text: string) {
+  async fill(target: string, text: string, attempt = 0): Promise<unknown> {
     const before = Date.now();
     const { id } = await this.actionable(target, { hitTest: false });
     const kind = await this.callOn(id, `function(){
@@ -495,6 +517,17 @@ export class Browser {
     if (text) await this.send("Input.insertText", { text });
     await this.callOn(id, `function(){ this.dispatchEvent(new Event('change', { bubbles: true })); }`).catch(() => {});
     await this.networkIdle(150, 1500, before);
+    // Hydrating pages may swap the input for a new one right after we typed: verify, and refill the (healed) ref once.
+    if (kind === "input" && attempt < 2) {
+      const ok = await this.callOn(id, "function(v){ return this.isConnected && this.value === v; }", [text]).catch(() => false);
+      if (!ok) {
+        await sleep(50);
+        // If the healed field already carries the text (frameworks copy it over), leave it.
+        const healed = await this.resolve(target).catch(() => null);
+        if (healed && await this.callOn(healed, "function(v){ return this.value === v; }", [text]).catch(() => false)) return;
+        return this.fill(target, text, attempt + 1);
+      }
+    }
   }
 
   async type(text: string, target?: string) {
