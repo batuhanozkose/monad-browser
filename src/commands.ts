@@ -1,7 +1,9 @@
 // Command table shared by the daemon (and later MCP). Each command returns compact text.
 import { writeFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
+import { readFileSync } from "node:fs";
 import type { Browser } from "./browser.js";
+import { runScript, RUN_HELP } from "./run.js";
 
 export type Ctx = { browser: Browser; cwd: string };
 type Flags = Record<string, string | boolean>;
@@ -34,6 +36,15 @@ async function maybeSnap(ctx: Ctx, flags: Flags, msg: string) {
 }
 
 export const COMMANDS: Record<string, Cmd> = {
+  run: {
+    usage: RUN_HELP,
+    async run(ctx, args, flags) {
+      const code = typeof flags.f === "string" ? readFileSync(resolvePath(ctx.cwd, flags.f), "utf8")
+        : typeof flags.file === "string" ? readFileSync(resolvePath(ctx.cwd, flags.file), "utf8") : args.join(" ");
+      if (!code.trim()) throw new Error(`usage: ${this.usage}`);
+      return runScript(ctx.browser, code, ctx.cwd, num(flags.timeout, 120_000));
+    },
+  },
   open: {
     usage: "open <url> [-s] [-i]   navigate the current tab (alias: goto)",
     async run(ctx, args, flags) {

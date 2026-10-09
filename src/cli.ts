@@ -86,7 +86,12 @@ async function main() {
   } else if (!(await alive())) {
     await startDaemon(session, launch);
   }
-  const res = await request(session, argv);
+  if (cmd === "run" && (argv[1] === "-" || (argv.length === 1 && !process.stdin.isTTY))) {
+    const chunks: Buffer[] = [];
+    for await (const c of process.stdin) chunks.push(c as Buffer);
+    argv = ["run", "--", Buffer.concat(chunks).toString("utf8")];
+  }
+  const res = await request(session, argv, cmd === "run" ? 600_000 : 120_000);
   if (res.ok) { if (res.out) process.stdout.write(res.out.endsWith("\n") ? res.out : res.out + "\n"); }
   else { process.stderr.write(`error: ${res.error}\n`); process.exitCode = 1; }
 }

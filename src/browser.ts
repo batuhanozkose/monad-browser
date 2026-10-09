@@ -10,7 +10,10 @@ export type BrowserOptions = {
   proxy?: string;
 };
 
-type Tab = { targetId: string; sessionId: string; refs: RefTable; inflight: Set<string>; lastNet: number; url: string; title: string };
+type Tab = {
+  targetId: string; sessionId: string; refs: RefTable; inflight: Set<string>; lastNet: number; url: string; title: string;
+  mainFrame?: string; navAt: number; loadAt: number;
+};
 
 const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", media: "Media", stylesheet: "Stylesheet", css: "Stylesheet" };
 
@@ -22,6 +25,7 @@ export class Browser {
   private blockTypes: string[] = [];
   private dialogs: string[] = [];
   console: string[] = [];
+  actionTimeout = Number(process.env.MONAD_ACTION_TIMEOUT ?? 5000);
 
   constructor(private opts: BrowserOptions = {}) {}
 
@@ -69,7 +73,7 @@ export class Browser {
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Set(), lastNet: Date.now(), url: "", title: "" };
+    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Set(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0 };
     this.tabs.set(targetId, tab);
     const s = sessionId;
     const on = (ev: string, fn: (p: any) => void) => this.cdp.on(ev, (p, sid) => { if (sid === s) fn(p); });
@@ -77,7 +81,11 @@ export class Browser {
     const done = (p: any) => { tab.inflight.delete(p.requestId); tab.lastNet = Date.now(); };
     on("Network.loadingFinished", done);
     on("Network.loadingFailed", done);
-    on("Page.frameNavigated", (p) => { if (!p.frame.parentId) { tab.url = p.frame.url; tab.inflight.clear(); } });
+    on("Page.frameNavigated", (p) => { if (!p.frame.parentId) { tab.url = p.frame.url; tab.mainFrame = p.frame.id; } });
+    on("Page.frameRequestedNavigation", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
+    on("Page.frameStartedLoading", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
+    on("Page.lifecycleEvent", (p) => { if (p.name === "load" && (!tab.mainFrame || p.frameId === tab.mainFrame)) tab.loadAt = Date.now(); });
+    on("Page.navigatedWithinDocument", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.url = p.url; });
     on("Page.javascriptDialogOpening", async (p) => {
       this.dialogs.push(`${p.type}: ${p.message}`);
       // Never let a dialog wedge the agent: accept by default (prompt gets its default text).
@@ -140,12 +148,12 @@ export class Browser {
     if (!/^([a-z][a-z0-9+.-]*:\/\/|about:|data:|file:|javascript:|blob:)/i.test(url)) url = (/^(localhost|127\.|\[::1\])/.test(url) ? "http://" : "https://") + url;
     const tab = this.tab();
     const timeoutMs = opts.timeoutMs ?? 30_000;
-    const loaded = this.cdp.waitFor("Page.lifecycleEvent", { sessionId: tab.sessionId, timeoutMs, predicate: (p) => p.name === "load" });
-    loaded.catch(() => {});
+    const since = Date.now();
     const res = await this.send("Page.navigate", { url });
     if (res.errorText) throw new Error(`navigation failed: ${res.errorText} (${url})`);
-    if (res.loaderId) await loaded.catch(() => { /* slow load: fall through to idle wait */ });
-    await this.networkIdle(400, 4000);
+    const end = since + timeoutMs;
+    while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(20);
+    await this.networkIdle(250, 4000);
     tab.refs = newRefTable();
     return this.info();
   }
@@ -157,7 +165,7 @@ export class Browser {
 
   async evaluate(expression: string, awaitPromise = true) {
     const src = /^\s*(return\b|await\b|const\b|let\b|for\b|if\b)/.test(expression) || /;\s*\S/.test(expression)
-      ? `(async () => { ${/\breturn\b/.test(expression) ? expression : `return (${expression})`} })()`
+      ? `(async () => { ${/\breturn\b/.test(expression) || /^\s*(const|let|for|if)\b/.test(expression) ? expression : `return (${expression})`} })()`
       : expression;
     const r: any = await this.send("Runtime.evaluate", { expression: src, awaitPromise, returnByValue: true, userGesture: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
@@ -173,20 +181,67 @@ export class Browser {
     return `# ${title} — ${url}\n${extra.length ? extra.join("\n") + "\n" : ""}${res.text}`;
   }
 
-  /** Resolve `@N`, `N`, or a CSS selector to a backendNodeId. */
+  /**
+   * Resolve a target to a backendNodeId. Accepts `@N` refs, `text=Label`, `role=button[:name]`, or CSS.
+   * Refs self-heal: if the ref'd node was re-rendered, it is re-found by its role + accessible name.
+   */
   async resolve(target: string): Promise<number> {
     const tab = this.tab();
-    const m = /^@?e?(\d+)$/.exec(target.trim());
+    const t = target.trim();
+    const m = /^@?e?(\d+)$/.exec(t);
     if (m) {
-      const ref = tab.refs.byRef.get(Number(m[1]));
-      if (!ref) throw new Error(`unknown ref @${m[1]} — take a fresh snapshot`);
-      return ref.backendNodeId;
+      const n = Number(m[1]);
+      const ref = tab.refs.byRef.get(n);
+      if (!ref) throw new Error(`unknown ref @${n} — take a fresh snapshot`);
+      if (await this.isAttached(ref.backendNodeId)) return ref.backendNodeId;
+      const healed = ref.name ? await this.queryAX(ref.name, ref.role === "clickable" ? undefined : ref.role) : [];
+      if (healed.length === 1) {
+        tab.refs.byBackend.delete(ref.backendNodeId);
+        ref.backendNodeId = healed[0];
+        tab.refs.byBackend.set(healed[0], n);
+        return healed[0];
+      }
+      throw new Error(`@${n} (${ref.role} "${ref.name}") is gone from the page — take a fresh snapshot`);
+    }
+    if (t.startsWith("text=")) {
+      const ids = await this.queryAX(t.slice(5));
+      if (!ids.length) throw new Error(`no element named "${t.slice(5)}"`);
+      return ids[0];
+    }
+    const rm = /^role=([\w-]+)(?::(.+))?$/.exec(t);
+    if (rm) {
+      const ids = await this.queryAX(rm[2], rm[1]);
+      if (!ids.length) throw new Error(`no ${rm[1]}${rm[2] ? ` named "${rm[2]}"` : ""}`);
+      return ids[0];
     }
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
-    const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector: target });
-    if (!nodeId) throw new Error(`no element matches selector: ${target}`);
+    const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector: t });
+    if (!nodeId) throw new Error(`no element matches selector: ${t}`);
     const { node } = await this.send("DOM.describeNode", { nodeId });
     return node.backendNodeId;
+  }
+
+  private async isAttached(backendNodeId: number) {
+    try {
+      const { object } = await this.send("DOM.resolveNode", { backendNodeId });
+      if (!object?.objectId) return false;
+      const r: any = await this.send("Runtime.callFunctionOn", { objectId: object.objectId, functionDeclaration: "function(){return this.isConnected}", returnByValue: true });
+      this.send("Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
+      return r.result?.value === true;
+    } catch { return false; }
+  }
+
+  /** Accessible-name (+ role) lookup over the whole document, visible nodes first. */
+  private async queryAX(name?: string, role?: string): Promise<number[]> {
+    const { root } = await this.send("DOM.getDocument", { depth: 0 });
+    const params: any = { backendNodeId: root.backendNodeId };
+    if (name) params.accessibleName = name;
+    if (role) params.role = role;
+    const { nodes } = await this.send("Accessibility.queryAXTree", params);
+    const ids: number[] = nodes.filter((n: any) => !n.ignored && n.backendDOMNodeId).map((n: any) => n.backendDOMNodeId);
+    const visible: number[] = [];
+    for (const id of ids) { try { const { quads } = await this.send("DOM.getContentQuads", { backendNodeId: id }); if (quads?.length) visible.push(id); } catch { /* hidden */ } }
+    return visible.length ? visible : ids;
   }
 
   private async objectId(backendNodeId: number) {
@@ -204,51 +259,98 @@ export class Browser {
     return r.result?.value;
   }
 
+  private async quadCenter(backendNodeId: number): Promise<{ x: number; y: number } | null> {
+    try {
+      const { quads } = await this.send("DOM.getContentQuads", { backendNodeId });
+      if (!quads?.length) return null;
+      // Largest quad wins (wrapped inline links have several).
+      let best = quads[0], area = 0;
+      for (const q of quads) { const a = Math.abs((q[2] - q[0]) * (q[5] - q[1])); if (a > area) { area = a; best = q; } }
+      if (area < 1) return null;
+      return { x: (best[0] + best[2] + best[4] + best[6]) / 4, y: (best[1] + best[3] + best[5] + best[7]) / 4 };
+    } catch { return null; }
+  }
+
   private async center(backendNodeId: number): Promise<{ x: number; y: number }> {
     await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId }).catch(() => {});
-    for (let i = 0; i < 10; i++) {
-      try {
-        const { quads } = await this.send("DOM.getContentQuads", { backendNodeId });
-        if (quads?.length) {
-          const q = quads[0];
-          const x = (q[0] + q[2] + q[4] + q[6]) / 4, y = (q[1] + q[3] + q[5] + q[7]) / 4;
-          return { x, y };
-        }
-      } catch { /* not laid out yet */ }
+    for (let i = 0; i < 20; i++) {
+      const c = await this.quadCenter(backendNodeId);
+      if (c) return c;
       await sleep(100);
     }
     throw new Error("element is not visible (no layout box)");
   }
 
-  async click(target: string, opts: { button?: "left" | "right" | "middle"; count?: number } = {}) {
-    const id = await this.resolve(target);
-    const { x, y } = await this.center(id);
-    // Hit-test: if something covers the point, report it rather than clicking the wrong thing silently.
-    const covered = await this.callOn(id, `function(x, y){ const e = document.elementFromPoint(x, y); if (!e || this === e || this.contains(e) || e.contains(this)) return null; const d = e.closest('[role],button,a,input') || e; return (d.tagName.toLowerCase() + (d.id ? '#' + d.id : '') + ' "' + (d.innerText||'').trim().slice(0,40) + '"'); }`, [x, y]).catch(() => null);
-    if (covered) throw new Error(`click target is covered by ${covered} — close it or use 'eval'`);
+  /**
+   * Auto-wait until the element can receive input: attached, visible, stable (not animating),
+   * enabled, and not covered by another element at its center. Returns the point to act on.
+   */
+  async actionable(target: string, opts: { timeoutMs?: number; enabled?: boolean; hitTest?: boolean } = {}): Promise<{ id: number; x: number; y: number }> {
+    const end = Date.now() + (opts.timeoutMs ?? this.actionTimeout);
+    let reason = "not found";
+    let last: { x: number; y: number } | null = null;
+    let scrolled = false;
+    while (true) {
+      try {
+        const id = await this.resolve(target);
+        if (!scrolled) { await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: id }).catch(() => {}); scrolled = true; }
+        const c = await this.quadCenter(id);
+        if (!c) { reason = "not visible"; scrolled = false; }
+        else if (!last || Math.abs(last.x - c.x) > 0.5 || Math.abs(last.y - c.y) > 0.5) { reason = "still moving"; last = c; await sleep(30); continue; }
+        else {
+          const state = await this.callOn(id, `function(x, y, hit, needEnabled){
+            const el = this;
+            if (needEnabled && (el.disabled || el.closest('[aria-disabled="true"],fieldset[disabled]'))) return 'disabled';
+            const st = getComputedStyle(el);
+            if (st.visibility === 'hidden' || st.pointerEvents === 'none') return 'not interactable (' + (st.visibility === 'hidden' ? 'hidden' : 'pointer-events:none') + ')';
+            if (!hit) return 'ok';
+            let e = document.elementFromPoint(x, y);
+            while (e && e.shadowRoot) { const inner = e.shadowRoot.elementFromPoint(x, y); if (!inner || inner === e) break; e = inner; }
+            if (!e || el === e || el.contains(e) || e.contains(el)) return 'ok';
+            const lab = el.labels && [...el.labels].some(l => l === e || l.contains(e));
+            if (lab) return 'ok';
+            const d = e.closest('[role],button,a,input,dialog') || e;
+            return 'covered by ' + d.tagName.toLowerCase() + (d.id ? '#' + d.id : '') + (d.className && typeof d.className === 'string' ? '.' + d.className.trim().split(/\\s+/)[0] : '') + ' "' + (d.innerText || '').trim().slice(0, 40) + '"';
+          }`, [c.x, c.y, opts.hitTest !== false, opts.enabled !== false]);
+          if (state === "ok") return { id, ...c };
+          reason = state;
+        }
+      } catch (e: any) {
+        reason = e?.message ?? String(e);
+        if (/is gone from the page|unknown ref/.test(reason)) throw e;
+      }
+      if (Date.now() > end) throw new Error(`${target}: ${reason} (waited ${opts.timeoutMs ?? this.actionTimeout} ms)`);
+      await sleep(100);
+    }
+  }
+
+  async click(target: string, opts: { button?: "left" | "right" | "middle"; count?: number; timeoutMs?: number } = {}) {
+    const { x, y } = await this.actionable(target, { timeoutMs: opts.timeoutMs });
     const button = opts.button ?? "left";
     const clickCount = opts.count ?? 1;
-    const tab = this.tab();
-    const before = tab.url;
+    const before = Date.now();
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-    await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount });
-    await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount });
+    for (let i = 1; i <= clickCount; i++) {
+      await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: i });
+      await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: i });
+    }
     await this.settle(before);
   }
 
-  /** After an action: give the page a moment to start navigating/fetching, then wait for quiet. */
-  async settle(beforeUrl?: string) {
-    await sleep(60);
+  /** After an action: if it started a main-frame navigation, wait for load; then wait for network quiet. */
+  async settle(since: number) {
     const tab = this.tab();
-    if (beforeUrl !== undefined && tab.url !== beforeUrl) {
-      await this.cdp.waitFor("Page.lifecycleEvent", { sessionId: tab.sessionId, timeoutMs: 10_000, predicate: (p) => p.name === "load" }).catch(() => {});
+    await sleep(30);
+    if (tab.navAt >= since) {
+      const end = Date.now() + 15_000;
+      while (tab.loadAt < tab.navAt && Date.now() < end) await sleep(25);
+      tab.refs = newRefTable();
     }
-    await this.networkIdle(300, 3000);
+    await this.networkIdle(250, 3000);
   }
 
   async fill(target: string, text: string) {
-    const id = await this.resolve(target);
-    await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: id }).catch(() => {});
+    const { id } = await this.actionable(target, { hitTest: false });
     const kind = await this.callOn(id, `function(){
       const el = this;
       if (el.tagName === 'SELECT') return 'select';
@@ -293,8 +395,7 @@ export class Browser {
     const modifiers = parts.reduce((m, p) => m | modifierBit(p), 0);
     const def = KEYS[keyName] ?? (keyName.length === 1 ? { key: keyName, code: `Key${keyName.toUpperCase()}`, keyCode: keyName.toUpperCase().charCodeAt(0), text: keyName } : undefined);
     if (!def) throw new Error(`unknown key: ${keyName}`);
-    const tab = this.tab();
-    const before = tab.url;
+    const before = Date.now();
     const base = { key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, modifiers };
     const text = modifiers & ~8 ? undefined : def.text; // no text when Ctrl/Alt/Meta held
     await this.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base, text, unmodifiedText: text });
@@ -303,7 +404,7 @@ export class Browser {
   }
 
   async hover(target: string) {
-    const { x, y } = await this.center(await this.resolve(target));
+    const { x, y } = await this.actionable(target, { enabled: false });
     await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
   }
 
@@ -343,9 +444,9 @@ export class Browser {
     return s.length > max ? s.slice(0, max) + `\n… (${s.length - max} more chars)` : s;
   }
 
-  async back() { const b = this.tab().url; await this.evaluate("history.back()"); await this.settle(b + "#"); }
-  async forward() { const b = this.tab().url; await this.evaluate("history.forward()"); await this.settle(b + "#"); }
-  async reload() { const b = this.tab().url; await this.send("Page.reload", {}); await this.settle(b + "#"); }
+  async back() { const b = Date.now(); await this.evaluate("history.back()"); await this.settle(b); }
+  async forward() { const b = Date.now(); await this.evaluate("history.forward()"); await this.settle(b); }
+  async reload() { const b = Date.now(); await this.send("Page.reload", {}); await this.settle(b); }
 
   listTabs() {
     return [...this.tabs.values()].map((t, i) => `${t === this.current ? "*" : " "} [${i}] ${t.title || "(untitled)"} — ${t.url}`).join("\n");
