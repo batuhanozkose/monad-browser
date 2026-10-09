@@ -14,6 +14,13 @@ mb screenshot page.png --full
 mb stop
 ```
 
+- **One-turn plans**: `mb run 'await goto("site"); await fill("role=textbox:Email", "a@b.c"); await click("text=Sign in"); return await title()'`
+  runs many steps in a single call; only what you `log()`/`return` comes back. Also `run --file plan.js` or `run -` (stdin).
+- **Auto-wait**: actions wait until the target is attached, visible, stable, enabled and not covered.
+  A cover (cookie banner, modal) is named in the error. Refs self-heal by role + name after re-renders.
+- **Targets**: `@N`, `text=Label`, `role=button:Submit`, or CSS.
+- **Inline snapshot**: rows, list items and paragraphs collapse to one line with inline refs
+  (`- row: 675 points by [ilreb]@14 [4 hours ago]@15 | [hide]@16`), about half the size of a tree dump.
 - **Warm daemon**: first command launches Chrome and a per-session daemon (unix socket); later commands take ~40 ms.
 - **Snapshot**: Accessibility tree merged with DOMSnapshot layout. Hidden nodes are dropped; `cursor:pointer`
   elements without an ARIA role show up as `clickable`. Refs stay stable for an element's lifetime.
@@ -24,5 +31,4 @@ mb stop
 
 Env: `MONAD_CHROME` (browser path), `MONAD_NO_SANDBOX=1`, `MONAD_IDLE_MINUTES` (default 30), `MONAD_HOME`.
 
-Status: alpha, phase 1 (daemon, CDP core, snapshot, basic commands). Next: `run` JS batch, auto-wait,
-diff snapshots, MCP mode.
+Status: alpha. Done: daemon, CDP core, snapshot, commands, `run`, auto-wait. Next: diff snapshots, sessions, MCP mode, benchmark.

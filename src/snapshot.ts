@@ -27,7 +27,7 @@ type AXNode = {
 
 type DomInfo = { visible: boolean; pointer: boolean; tag?: string; href?: string };
 
-export type SnapshotOptions = { interactive?: boolean; maxText?: number; maxLines?: number; compact?: boolean };
+export type SnapshotOptions = { interactive?: boolean; maxText?: number; maxLines?: number; compact?: boolean; maxInline?: number; maxProse?: number };
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 const norm = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
@@ -101,6 +101,53 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
     return acc;
   };
 
+  const BLOCK_ROLES = new Set(["heading", "list", "table", "form", "dialog", "alertdialog", "navigation", "banner", "contentinfo", "main", "article", "region", "complementary", "search", "menu", "menubar", "tablist", "tree", "grid", "listbox", "combobox", "radiogroup", "toolbar", "Iframe", "RootWebArea", "WebArea", "figure", "rowgroup"]);
+  const INLINE_MAX = opts.maxInline ?? 220;
+  const PROSE_ROLES = new Set(["paragraph", "listitem", "cell", "gridcell", "blockquote", "LabelText", "caption", "definition", "term", "DescriptionListDetail", "DescriptionListTerm", "figcaption"]);
+
+  /** Render a subtree as one line with inline refs: `text [label]@N text`. Returns null if it holds block structure. */
+  const inline = (n: AXNode, inPointer: boolean, top = true, max = INLINE_MAX): { s: string; parts: number } | null => {
+    const role = n.role?.value ?? "";
+    const name = norm(n.name?.value);
+    const info = n.backendDOMNodeId ? dom.get(n.backendDOMNodeId) : undefined;
+    if (!top && BLOCK_ROLES.has(role)) return null;
+    if (n.ignored || SKIP_ROLES.has(role) || (info && !info.visible && dom.size)) {
+      return joinKids(n, inPointer, " ", max);
+    }
+    if (role === "StaticText") return name ? { s: name, parts: 1 } : { s: "", parts: 0 };
+    const pointerOnly = !INTERACTIVE_ROLES.has(role) && !!info?.pointer;
+    if (!top && n.backendDOMNodeId && (INTERACTIVE_ROLES.has(role) || (pointerOnly && !inPointer))) {
+      const label = name || textOf(n);
+      if (pointerOnly && !label) return joinKids(n, true, " ", max);
+      const shownRole = pointerOnly ? "clickable" : role;
+      const r = refFor(n.backendDOMNodeId, shownRole, label);
+      const val = n.value?.value;
+      const st = props(n).filter((x) => x !== "focused");
+      const kind = role === "link" || pointerOnly ? "" : `${role}${label ? " " : ""}`;
+      let body = `${kind}${label ? clip(label, maxText) : role}`;
+      if (val !== undefined && val !== "" && role !== "link") body += `="${clip(norm(val), 40)}"`;
+      if (st.length) body += ` (${st.join(", ")})`;
+      return { s: `[${body}]@${r}`, parts: 1 };
+    }
+    if ((role === "img" || role === "image")) return name ? { s: `(img: ${clip(name, 40)})`, parts: 1 } : { s: "", parts: 0 };
+    const sep = role === "row" ? " | " : " ";
+    return joinKids(n, inPointer || !!info?.pointer, sep, max);
+  };
+  const joinKids = (n: AXNode, inPointer: boolean, sep = " ", max = INLINE_MAX): { s: string; parts: number } | null => {
+    const out: string[] = [];
+    let parts = 0;
+    for (const c of n.childIds ?? []) {
+      const r = inline(byId.get(c)!, inPointer, false, max);
+      if (r === null) return null;
+      if (r.s) { out.push(r.s); parts += r.parts; }
+      if (out.join(sep).length > max * 2) return null;
+    }
+    let joined = out.join(sep);
+    // "Name [textbox Name]@3" → "[textbox Name]@3": drop a label text that the next control repeats.
+    joined = joined.replace(/(^|\s|\|)([^\[\]@|]{1,60}?) \[((?:\w+ )?)\2(\]|=| \()/g, "$1[$3$2$4");
+    return { s: joined.replace(/\s+([,.;:!?)])/g, "$1").replace(/\(\s+/g, "("), parts };
+  };
+
   const walk = (n: AXNode | undefined, depth: number, parentName: string, inPointer = false) => {
     if (!n) return;
     const role = n.role?.value ?? "";
@@ -123,6 +170,10 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
     if (role === "StaticText") {
       if (opts.interactive) return;
       if (!name || (parentName && parentName.includes(name))) return;
+      const parent = n.parentId ? byId.get(n.parentId) : undefined;
+      const grand = parent?.parentId ? byId.get(parent.parentId) : undefined;
+      const sib = (x?: AXNode) => (x?.childIds ?? []).some((c) => { const k = byId.get(c); return k && k !== n && INTERACTIVE_ROLES.has(k.role?.value ?? "") && norm(k.name?.value) === name; });
+      if (sib(parent) || sib(grand)) return; // label text repeated by its control
       lines.push(`${pad}- text "${clip(name, maxText * 2)}"`);
       return;
     }
@@ -149,7 +200,20 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
     }
 
     if (opts.interactive) return kids(childInPointer);
-    if ((role === "img" || role === "image") && !name) return; // decorative
+    if ((role === "img" || role === "image") && (!name || inPointer || parentName.includes(name))) return; // decorative or inside a control
+
+    // Containers whose content is just text + controls collapse to one line with inline refs.
+    if (!BLOCK_ROLES.has(role) || role === "navigation") {
+      const max = PROSE_ROLES.has(role) ? opts.maxProse ?? 1500 : INLINE_MAX;
+      const flat = inline(n, inPointer, true, max);
+      if (flat && flat.parts >= 1 && flat.s && flat.s.length <= max && !(flat.parts === 1 && TRANSPARENT_ROLES.has(role) && !/@\d+$/.test(flat.s) && false)) {
+        const tag = role === "row" ? "row: " : role === "listitem" ? "li: " : role === "navigation" ? "nav: " : role === "cell" || role === "gridcell" ? "cell: " : "";
+        if (flat.parts === 1 && !tag) {
+          // A lone text or control: keep the normal rendering below for controls (role shown), emit text directly.
+          if (!flat.s.includes("]@")) { if (!parentName.includes(flat.s)) lines.push(`${pad}- ${tag}${flat.s}`); return; }
+        } else { lines.push(`${pad}- ${tag}${flat.s}`); return; }
+      }
+    }
 
     if (STRUCTURAL_KEEP.has(role) || (!TRANSPARENT_ROLES.has(role) && name)) {
       if (!name && ["list", "row", "group"].includes(role) && (n.childIds?.length ?? 0) <= 1) return kids();
@@ -161,8 +225,27 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
   };
 
   walk(root, 0, "");
+  mergeLinkRuns(lines, INLINE_MAX);
   const maxLines = opts.maxLines ?? 400;
   let text = lines.join("\n");
   if (lines.length > maxLines) text = lines.slice(0, maxLines).join("\n") + `\n… ${lines.length - maxLines} more lines (use --max-lines or -i)`;
   return { text, refCount, lines: lines.length };
+}
+
+/** Merge consecutive plain `- link "X" @N` lines at the same indent into one inline line. */
+function mergeLinkRuns(lines: string[], max: number) {
+  const re = /^(\s*)- (?:link|button) "([^"]*)" @(\d+)$/;
+  for (let i = 0; i < lines.length; i++) {
+    const a = re.exec(lines[i]);
+    if (!a) continue;
+    let j = i + 1;
+    let acc = `[${a[2]}]@${a[3]}`;
+    while (j < lines.length) {
+      const b = re.exec(lines[j]);
+      if (!b || b[1] !== a[1] || acc.length + b[2].length + 8 > max) break;
+      acc += ` [${b[2]}]@${b[3]}`;
+      j++;
+    }
+    if (j > i + 1) lines.splice(i, j - i, `${a[1]}- ${acc}`);
+  }
 }
