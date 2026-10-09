@@ -151,6 +151,23 @@ export const COMMANDS: Record<string, Cmd> = {
       return ok ? "ok" : `timeout: ${args[0]} not visible`;
     },
   },
+  state: {
+    usage: "state save <file> | state load <file>   cookies + storage (log in once, reuse everywhere)",
+    async run(ctx, args) {
+      need(args, 2, this.usage);
+      const file = resolvePath(ctx.cwd, args[1]);
+      if (args[0] === "save") {
+        const st = await ctx.browser.saveState();
+        writeFileSync(file, JSON.stringify(st, null, 1), { mode: 0o600 });
+        return `ok saved ${st.cookies.length} cookies, ${st.origins.length} origin storage → ${file}`;
+      }
+      if (args[0] === "load") {
+        const r = await ctx.browser.loadState(JSON.parse(readFileSync(file, "utf8")));
+        return `ok loaded ${r.cookies} cookies, storage for ${r.origins} origin(s)${r.applied ? " (applied to current page)" : " (applied when the origin is opened)"}`;
+      }
+      throw new Error(`usage: ${this.usage}`);
+    },
+  },
   tabs: { usage: "tabs   list tabs", async run(ctx) { return ctx.browser.listTabs(); } },
   tab: {
     usage: "tab <index> | tab new [url] | tab close [index]",
@@ -182,7 +199,7 @@ export function helpText() {
   const seen = new Set<Cmd>();
   const lines = ["monad-browser — headless browser for agents", "", "usage: mb [--session NAME] <command> [args]", "", "commands:"];
   for (const c of Object.values(COMMANDS)) { if (seen.has(c)) continue; seen.add(c); lines.push(`  ${c.usage}`); }
-  lines.push("  start [--cdp URL|PORT] [--headful] [--profile DIR] [--block image,font]   start daemon explicitly", "  stop | status");
+  lines.push("  start [--cdp URL|PORT] [--headful] [--profile DIR] [--block image,font]   start daemon explicitly", "  stop [--all] | status | sessions   (each --session NAME is its own browser; --profile DIR persists it)");
   lines.push("", "refs: snapshot assigns @N to interactive elements; refs stay stable while the element lives.");
   return lines.join("\n");
 }

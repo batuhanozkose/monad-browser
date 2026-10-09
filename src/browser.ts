@@ -177,6 +177,29 @@ export class Browser {
     return r.result?.value;
   }
 
+  /** Cookies (all origins) + localStorage/sessionStorage of the current origin, as JSON. */
+  async saveState() {
+    const { cookies } = await this.send("Network.getAllCookies", {});
+    const storage = await this.evaluate(`({ origin: location.origin, local: Object.fromEntries(Object.entries(localStorage)), session: Object.fromEntries(Object.entries(sessionStorage)) })`).catch(() => null);
+    return { version: 1, savedAt: new Date().toISOString(), cookies, origins: storage && storage.origin !== "null" ? [storage] : [] };
+  }
+
+  /** Restore saved state: cookies now; storage for each origin is written when that origin is open (and right now if it is). */
+  async loadState(state: { cookies?: any[]; origins?: { origin: string; local?: Record<string, string>; session?: Record<string, string> }[] }) {
+    if (state.cookies?.length) {
+      const cookies = state.cookies.map(({ size, session, ...c }: any) => (session || c.expires < 0 ? { ...c, expires: undefined } : c));
+      await this.send("Network.setCookies", { cookies });
+    }
+    let applied = 0;
+    for (const o of state.origins ?? []) {
+      const js = `(() => { if (location.origin !== ${JSON.stringify(o.origin)}) return false; for (const [k, v] of Object.entries(${JSON.stringify(o.local ?? {})})) localStorage.setItem(k, v); for (const [k, v] of Object.entries(${JSON.stringify(o.session ?? {})})) sessionStorage.setItem(k, v); return true; })()`;
+      await this.send("Page.addScriptToEvaluateOnNewDocument", { source: js });
+      const r: any = await this.send("Runtime.evaluate", { expression: js, returnByValue: true }).catch(() => null);
+      if (r?.result?.value === true) applied++;
+    }
+    return { cookies: state.cookies?.length ?? 0, origins: state.origins?.length ?? 0, applied };
+  }
+
   /** Snapshot; with `diff`, only lines that changed since this tab's previous snapshot of the same page. */
   async snapshot(opts: SnapshotOptions & { diff?: boolean } = {}) {
     const tab = this.tab();

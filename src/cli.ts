@@ -3,7 +3,7 @@
 import { connect } from "node:net";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { existsSync, openSync, mkdirSync } from "node:fs";
+import { existsSync, openSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { socketPath, stateDir, runDaemon, type Response } from "./daemon.js";
 import { helpText, parseArgs } from "./commands.js";
@@ -37,6 +37,25 @@ async function startDaemon(session: string, launchArgv: string[]) {
 }
 
 const LAUNCH_FLAGS = ["cdp", "headful", "profile", "block", "chrome", "idle", "proxy"];
+
+async function liveSessions() {
+  if (!existsSync(stateDir())) return [];
+  const names = readdirSync(stateDir()).filter((f) => f.endsWith(".pid")).map((f) => f.slice(0, -4));
+  const live: string[] = [];
+  for (const n of names) { try { await request(n, ["status"], 2000); live.push(n); } catch { /* stale */ } }
+  return live;
+}
+async function listSessions() {
+  const live = await liveSessions();
+  if (!live.length) return "no sessions running";
+  const out: string[] = [];
+  for (const n of live) {
+    const r = await request(n, ["status"], 2000).catch(() => null);
+    const first = r?.out?.split("\n").find((l) => l.includes("*")) ?? "";
+    out.push(`${n}\t${first.replace(/^\s*\*?\s*/, "")}`);
+  }
+  return out.join("\n");
+}
 
 async function main() {
   let argv = process.argv.slice(2);
@@ -73,6 +92,11 @@ async function main() {
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { console.log(helpText()); return; }
   if (cmd === "--version" || cmd === "version") { console.log("monad-browser 0.1.0-alpha.0"); return; }
 
+  if (cmd === "sessions") { console.log(await listSessions()); return; }
+  if (cmd === "stop" && argv[1] === "--all") {
+    for (const s of await liveSessions()) { await request(s, ["stop"], 5000).catch(() => {}); console.log(`ok stopped ${s}`); }
+    return;
+  }
   const alive = async () => { try { await request(session, ["status"], 3000); return true; } catch { return false; } };
   if (cmd === "start") {
     const rest = argv.slice(1);
