@@ -1,0 +1,6 @@
+{"form":{"openMs":519,"openOutTokens":386,"snapMs":384,"bytes":852,"tokens":300},
+"example":{"openMs":453,"openOutTokens":381,"snapMs":353,"bytes":1673,"tokens":340},
+"hn":{"openMs":853,"openOutTokens":13664,"snapMs":425,"bytes":49173,"tokens":13618},
+"wiki":{"openMs":2196,"openOutTokens":117814,"snapMs":961,"bytes":412119,"tokens":117767},
+"books":{"openMs":1517,"openOutTokens":8741,"snapMs":391,"bytes":32976,"tokens":8661},
+"mdn":{"openMs":1737,"openOutTokens":23793,"snapMs":691,"bytes":158344,"tokens":43263}}

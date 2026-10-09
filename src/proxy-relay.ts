@@ -6,7 +6,7 @@ import { createServer, connect, type Server, type Socket } from "node:net";
 
 export type Upstream = { host: string; port: number; username: string; password: string };
 
-export async function startProxyRelay(up: Upstream): Promise<{ port: number; server: Server }> {
+export async function startProxyRelay(up: Upstream, listenPort = 0): Promise<{ port: number; server: Server }> {
   const auth = "Basic " + Buffer.from(`${up.username}:${up.password}`).toString("base64");
   const server = createServer((client: Socket) => {
     let head = Buffer.alloc(0);
@@ -39,7 +39,7 @@ export async function startProxyRelay(up: Upstream): Promise<{ port: number; ser
     client.on("data", onData);
     client.on("error", () => client.destroy());
   });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => server.listen(listenPort, "127.0.0.1", r));
   const addr = server.address();
   return { port: typeof addr === "object" && addr ? addr.port : 0, server };
 }

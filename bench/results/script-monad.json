@@ -1,0 +1,23 @@
+{
+ "key": "monad",
+ "tool": "monad-browser (CLI)",
+ "tasks": {
+  "form": {
+   "ok": true,
+   "calls": 1,
+   "ms": 300,
+   "inTokens": 50,
+   "outTokens": 7,
+   "out": "Hello Ada / pro / true\n"
+  },
+  "books": {
+   "ok": true,
+   "calls": 1,
+   "ms": 725,
+   "inTokens": 65,
+   "outTokens": 68,
+   "out": "{\"url\":\"https://books.toscrape.com/catalogue/category/books/mystery_3/page-2.html\",\"titles\":[\"The Mysterious Affair at Styles (Hercule Poirot #1)\",\"In the Woods (Dublin Murder Squad #1)\",\"The Silkworm (Cormoran Strike #2)\"]}\n"
+  }
+ },
+ "coldStartMs": 774
+}

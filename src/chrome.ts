@@ -24,7 +24,7 @@ export async function proxyConfig(explicit?: string): Promise<{ args: string[]; 
   }
   const args = [`--proxy-server=${server}`];
   const noProxy = process.env.NO_PROXY || process.env.no_proxy;
-  args.push(`--proxy-bypass-list=${["<-loopback>", ...(noProxy ? noProxy.split(",").map((s) => s.trim()).filter(Boolean) : [])].join(";")}`);
+  args.push(`--proxy-bypass-list=${["localhost", "127.0.0.1", "[::1]", ...(noProxy ? noProxy.split(",").map((s) => s.trim()).filter(Boolean) : [])].join(";")}`);
   return { args, relay };
 }
 

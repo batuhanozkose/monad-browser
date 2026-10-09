@@ -1,0 +1,23 @@
+{
+ "key": "pwmcp",
+ "tool": "Playwright MCP",
+ "tasks": {
+  "form": {
+   "ok": true,
+   "calls": 1,
+   "ms": 663,
+   "inTokens": 65,
+   "outTokens": 90,
+   "out": "### Result\n\"Hello Ada / pro / true\"\n### Ran Playwright code\n```js\nawait (async (page) => { await page.goto(\"http://127.0.0.1:18081/form.html\"); await page.fill(\"#name\",\"Ada\"); await page.selectOption(\"#plan\",\"pro\"); await page.check(\"#agree\"); await page.click(\"text=Submit\"); return await page.textContent(\"#out\"); })(page);\n```"
+  },
+  "books": {
+   "ok": true,
+   "calls": 1,
+   "ms": 852,
+   "inTokens": 76,
+   "outTokens": 199,
+   "out": "### Result\n{\"url\":\"https://books.toscrape.com/catalogue/category/books/mystery_3/page-2.html\",\"titles\":[\"The Mysterious Affair at Styles (Hercule Poirot #1)\",\"In the Woods (Dublin Murder Squad #1)\",\"The Silkworm (Cormoran Strike #2)\"]}\n### Ran Playwright code\n```js\nawait (async (page) => { await page.goto(\"https://books.toscrape.com/\"); await page.click(\"text=Mystery\"); await page.click(\"text=next"
+  }
+ },
+ "coldStartMs": 1221
+}

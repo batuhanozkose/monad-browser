@@ -12,12 +12,15 @@ export type BrowserOptions = {
 };
 
 type Tab = {
-  targetId: string; sessionId: string; refs: RefTable; inflight: Set<string>; lastNet: number; url: string; title: string;
+  targetId: string; sessionId: string; refs: RefTable; inflight: Map<string, number>; lastNet: number; url: string; title: string;
   mainFrame?: string; navAt: number; loadAt: number;
   last?: { key: string; lines: string[] };
 };
 
 const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", media: "Media", stylesheet: "Stylesheet", css: "Stylesheet" };
+
+const STALE_MS = 2000;
+const DOM_TYPES = new Set(["Document", "Script", "XHR", "Fetch", "Stylesheet"]);
 
 export class Browser {
   cdp!: CDP;
@@ -75,12 +78,19 @@ export class Browser {
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Set(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0 };
+    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0 };
     this.tabs.set(targetId, tab);
     const s = sessionId;
     const on = (ev: string, fn: (p: any) => void) => this.cdp.on(ev, (p, sid) => { if (sid === s) fn(p); });
-    on("Network.requestWillBeSent", (p) => { if (p.type !== "WebSocket" && p.type !== "EventSource") tab.inflight.add(p.requestId); tab.lastNet = Date.now(); });
-    const done = (p: any) => { tab.inflight.delete(p.requestId); tab.lastNet = Date.now(); };
+    on("Network.requestWillBeSent", (p) => {
+      const now = Date.now();
+      // A new top-level document cancels the old page's loads; their loadingFinished/Failed may never arrive.
+      if (p.type === "Document" && p.requestId === p.loaderId && !p.redirectResponse && p.frameId === tab.targetId) tab.inflight.clear();
+      // Only loads that can still change the DOM gate settling; images, fonts, media and beacons do not.
+      if (DOM_TYPES.has(p.type)) tab.inflight.set(p.requestId, now);
+      if (DOM_TYPES.has(p.type)) tab.lastNet = now;
+    });
+    const done = (p: any) => { if (tab.inflight.delete(p.requestId)) tab.lastNet = Date.now(); };
     on("Network.loadingFinished", done);
     on("Network.loadingFailed", done);
     on("Page.frameNavigated", (p) => { if (!p.frame.parentId) { tab.url = p.frame.url; tab.mainFrame = p.frame.id; } });
@@ -136,12 +146,17 @@ export class Browser {
   send<T = any>(method: string, params: object = {}) { return this.cdp.send<T>(method, params, this.tab().sessionId); }
 
   /** Wait until no tracked requests are in flight for `idleMs`, capped at `timeoutMs`. */
-  async networkIdle(idleMs = 400, timeoutMs = 5000) {
+  async networkIdle(idleMs = 400, timeoutMs = 5000, since = 0) {
     const tab = this.tab();
     const end = Date.now() + timeoutMs;
     while (Date.now() < end) {
-      if (tab.inflight.size === 0 && Date.now() - tab.lastNet >= idleMs) return true;
-      await sleep(50);
+      // Requests pending for > STALE_MS are long-polls, beacons or leaked ids: they never block settling.
+      const now = Date.now();
+      let active = 0;
+      for (const [id, t] of tab.inflight) { if (now - t > 30_000) tab.inflight.delete(id); else if (now - t < STALE_MS) active++; }
+      // Traffic that predates the action (since) needs no quiet window of its own.
+      if (active === 0 && (tab.lastNet < since || now - tab.lastNet >= idleMs)) return true;
+      await sleep(15);
     }
     return false;
   }
@@ -155,7 +170,7 @@ export class Browser {
     if (res.errorText) throw new Error(`navigation failed: ${res.errorText} (${url})`);
     const end = since + timeoutMs;
     while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(20);
-    await this.networkIdle(250, 4000);
+    await this.networkIdle(50, 4000);
     tab.refs = newRefTable();
     return this.info();
   }
@@ -336,7 +351,7 @@ export class Browser {
         if (!scrolled) { await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: id }).catch(() => {}); scrolled = true; }
         const c = await this.quadCenter(id);
         if (!c) { reason = "not visible"; scrolled = false; }
-        else if (!last || Math.abs(last.x - c.x) > 0.5 || Math.abs(last.y - c.y) > 0.5) { reason = "still moving"; last = c; await sleep(30); continue; }
+        else if (!last || Math.abs(last.x - c.x) > 0.5 || Math.abs(last.y - c.y) > 0.5) { reason = "still moving"; last = c; await sleep(16); continue; }
         else {
           const state = await this.callOn(id, `function(x, y, hit, needEnabled){
             const el = this;
@@ -380,16 +395,17 @@ export class Browser {
   /** After an action: if it started a main-frame navigation, wait for load; then wait for network quiet. */
   async settle(since: number) {
     const tab = this.tab();
-    await sleep(30);
+    await sleep(15);
     if (tab.navAt >= since) {
       const end = Date.now() + 15_000;
       while (tab.loadAt < tab.navAt && Date.now() < end) await sleep(25);
       tab.refs = newRefTable();
     }
-    await this.networkIdle(250, 3000);
+    await this.networkIdle(150, 3000, since);
   }
 
   async fill(target: string, text: string) {
+    const before = Date.now();
     const { id } = await this.actionable(target, { hitTest: false });
     const kind = await this.callOn(id, `function(){
       const el = this;
@@ -408,7 +424,7 @@ export class Browser {
     if (kind === "select") return this.select(target, [text]);
     if (text) await this.send("Input.insertText", { text });
     await this.callOn(id, `function(){ this.dispatchEvent(new Event('change', { bubbles: true })); }`).catch(() => {});
-    await this.networkIdle(200, 1500);
+    await this.networkIdle(150, 1500, before);
   }
 
   async type(text: string, target?: string) {

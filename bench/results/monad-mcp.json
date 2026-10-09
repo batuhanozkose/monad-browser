@@ -1,0 +1,126 @@
+{
+ "tool": "monad-browser (MCP)",
+ "key": "monad-mcp",
+ "at": "2026-10-09T18:03:00.407Z",
+ "pages": {
+  "form": {
+   "openMs": 147,
+   "openOutTokens": 117,
+   "snapMs": 13,
+   "bytes": 251,
+   "tokens": 97,
+   "iBytes": 202,
+   "iTokens": 77
+  },
+  "example": {
+   "openMs": 142,
+   "openOutTokens": 241,
+   "snapMs": 4,
+   "bytes": 1360,
+   "tokens": 231,
+   "iBytes": 64,
+   "iTokens": 17
+  },
+  "hn": {
+   "openMs": 476,
+   "openOutTokens": 2350,
+   "snapMs": 75,
+   "bytes": 5988,
+   "tokens": 2335,
+   "iBytes": 4669,
+   "iTokens": 1744
+  },
+  "wiki": {
+   "openMs": 1795,
+   "openOutTokens": 15962,
+   "snapMs": 623,
+   "bytes": 53533,
+   "tokens": 15943,
+   "iBytes": 26069,
+   "iTokens": 10168
+  },
+  "books": {
+   "openMs": 968,
+   "openOutTokens": 2561,
+   "snapMs": 52,
+   "bytes": 6407,
+   "tokens": 2540,
+   "iBytes": 2650,
+   "iTokens": 925
+  },
+  "mdn": {
+   "openMs": 3279,
+   "openOutTokens": 4654,
+   "snapMs": 215,
+   "bytes": 17588,
+   "tokens": 4624,
+   "iBytes": 10991,
+   "iTokens": 3734
+  }
+ },
+ "tasks": {
+  "form": {
+   "ok": true,
+   "calls": 6,
+   "outTokens": 413,
+   "inTokens": 83,
+   "ms": 226,
+   "retries": 0,
+   "trace": [
+    "open(http://127.0.0.1:18081/form.html) 86ms 80tok",
+    "snap(full) 4ms 97tok",
+    "fill(@3, Ada) 35ms 63tok",
+    "select(@4, Pro) 5ms 3tok",
+    "click(@5) 49ms 109tok",
+    "click(@6) 46ms 61tok"
+   ]
+  },
+  "hn-comments": {
+   "ok": true,
+   "calls": 2,
+   "outTokens": 34337,
+   "inTokens": 30,
+   "ms": 1502,
+   "retries": 0,
+   "trace": [
+    "open(https://news.ycombinator.com/) 212ms 2350tok",
+    "click(@17) 1290ms 31987tok"
+   ]
+  },
+  "books-paginate": {
+   "ok": true,
+   "calls": 3,
+   "outTokens": 7100,
+   "inTokens": 41,
+   "ms": 1298,
+   "retries": 0,
+   "trace": [
+    "open(https://books.toscrape.com/) 277ms 2561tok",
+    "click(@5) 600ms 2620tok",
+    "click(@115) 421ms 1919tok"
+   ]
+  },
+  "wiki-search": {
+   "ok": true,
+   "calls": 2,
+   "outTokens": 18144,
+   "inTokens": 35,
+   "ms": 2533,
+   "retries": 0,
+   "trace": [
+    "open(https://en.wikipedia.org/wiki/Special:Se) 452ms 344tok",
+    "fillSubmit(@3, Gaziantep) 2082ms 17800tok"
+   ]
+  }
+ },
+ "latency": {
+  "openFormMs": 105,
+  "clickMs": 54,
+  "clickRef": "@5"
+ },
+ "coldStartMs": 919,
+ "mcp": {
+  "tools": 10,
+  "schemaTokens": 761
+ }
+}

@@ -1,0 +1,66 @@
+{
+ "tool": "Playwright CLI",
+ "key": "pwcli",
+ "at": "2026-10-09T17:53:28.467Z",
+ "pages": {},
+ "tasks": {
+  "form": {
+   "ok": true,
+   "calls": 9,
+   "outTokens": 1420,
+   "inTokens": 84,
+   "ms": 2842,
+   "retries": 0,
+   "trace": [
+    "open(http://127.0.0.1:18081/form.html) 376ms 340tok",
+    "fill(f5e8, Ada) 356ms 30tok",
+    "select(f5e10, Pro) 373ms 342tok",
+    "click(f5e12) 854ms 348tok",
+    "click(f5e13) 883ms 360tok"
+   ]
+  },
+  "hn-comments": {
+   "ok": true,
+   "calls": 4,
+   "outTokens": 218234,
+   "inTokens": 33,
+   "ms": 3154,
+   "retries": 0,
+   "trace": [
+    "open(https://news.ycombinator.com/) 754ms 13644tok",
+    "click(f6e51) 2399ms 204590tok"
+   ]
+  },
+  "books-paginate": {
+   "ok": true,
+   "calls": 6,
+   "outTokens": 23820,
+   "inTokens": 47,
+   "ms": 3672,
+   "retries": 0,
+   "trace": [
+    "open(https://books.toscrape.com/) 1399ms 8741tok",
+    "click(f8e23) 1144ms 8676tok",
+    "click(f9e518) 1128ms 6403tok"
+   ]
+  },
+  "wiki-search": {
+   "ok": true,
+   "calls": 4,
+   "outTokens": 119345,
+   "inTokens": 38,
+   "ms": 3532,
+   "retries": 0,
+   "trace": [
+    "open(https://en.wikipedia.org/wiki/Special:Se) 1080ms 1502tok",
+    "fillSubmit(f11e23, Gaziantep) 2452ms 117843tok"
+   ]
+  }
+ },
+ "latency": {
+  "openFormMs": 383,
+  "clickMs": 850,
+  "clickRef": "f4e12"
+ },
+ "coldStartMs": 1479
+}

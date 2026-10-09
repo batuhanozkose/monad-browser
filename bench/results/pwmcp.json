@@ -1,0 +1,113 @@
+{
+ "tool": "Playwright MCP",
+ "key": "pwmcp",
+ "at": "2026-10-09T17:59:02.820Z",
+ "pages": {
+  "form": {
+   "openMs": 140,
+   "openOutTokens": 388,
+   "snapMs": 10,
+   "bytes": 851,
+   "tokens": 299
+  },
+  "example": {
+   "openMs": 92,
+   "openOutTokens": 382,
+   "snapMs": 8,
+   "bytes": 1672,
+   "tokens": 339
+  },
+  "hn": {
+   "openMs": 534,
+   "openOutTokens": 13610,
+   "snapMs": 55,
+   "bytes": 48979,
+   "tokens": 13562
+  },
+  "wiki": {
+   "openMs": 1372,
+   "openOutTokens": 119934,
+   "snapMs": 382,
+   "bytes": 412800,
+   "tokens": 117975
+  },
+  "books": {
+   "openMs": 1060,
+   "openOutTokens": 8743,
+   "snapMs": 34,
+   "bytes": 32975,
+   "tokens": 8660
+  },
+  "mdn": {
+   "openMs": 1338,
+   "openOutTokens": 23867,
+   "snapMs": 256,
+   "bytes": 158482,
+   "tokens": 43336
+  }
+ },
+ "tasks": {
+  "form": {
+   "ok": true,
+   "calls": 9,
+   "outTokens": 1423,
+   "inTokens": 84,
+   "ms": 1227,
+   "retries": 0,
+   "trace": [
+    "open(http://127.0.0.1:18081/form.html) 79ms 341tok",
+    "fill(f25e8, Ada) 37ms 29tok",
+    "select(f25e10, Pro) 28ms 343tok",
+    "click(f25e12) 546ms 349tok",
+    "click(f25e13) 537ms 361tok"
+   ]
+  },
+  "hn-comments": {
+   "ok": true,
+   "calls": 4,
+   "outTokens": 220358,
+   "inTokens": 33,
+   "ms": 2064,
+   "retries": 0,
+   "trace": [
+    "open(https://news.ycombinator.com/) 227ms 13610tok",
+    "click(f26e51) 1838ms 206748tok"
+   ]
+  },
+  "books-paginate": {
+   "ok": true,
+   "calls": 6,
+   "outTokens": 23828,
+   "inTokens": 47,
+   "ms": 1894,
+   "retries": 0,
+   "trace": [
+    "open(https://books.toscrape.com/) 294ms 8743tok",
+    "click(f28e23) 801ms 8680tok",
+    "click(f29e518) 800ms 6405tok"
+   ]
+  },
+  "wiki-search": {
+   "ok": true,
+   "calls": 4,
+   "outTokens": 119492,
+   "inTokens": 38,
+   "ms": 2173,
+   "retries": 0,
+   "trace": [
+    "open(https://en.wikipedia.org/wiki/Special:Se) 413ms 1442tok",
+    "fillSubmit(f31e23, Gaziantep) 1760ms 118050tok"
+   ]
+  }
+ },
+ "latency": {
+  "openFormMs": 90,
+  "clickMs": 536,
+  "clickRef": "f24e12"
+ },
+ "coldStartMs": 1149,
+ "mcp": {
+  "tools": 25,
+  "schemaTokens": 3747
+ }
+}
