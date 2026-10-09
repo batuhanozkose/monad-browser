@@ -1,61 +1,61 @@
 {
  "tool": "agent-browser",
  "key": "ab",
- "at": "2026-10-09T18:43:37.329Z",
+ "at": "2026-10-09T18:48:03.172Z",
  "pages": {
   "form": {
-   "openMs": 102,
+   "openMs": 253,
    "openOutTokens": 20,
-   "snapMs": 21,
+   "snapMs": 129,
    "bytes": 542,
    "tokens": 177,
    "iBytes": 367,
    "iTokens": 128
   },
   "example": {
-   "openMs": 99,
+   "openMs": 201,
    "openOutTokens": 10,
-   "snapMs": 15,
+   "snapMs": 27,
    "bytes": 1489,
    "tokens": 267,
    "iBytes": 30,
    "iTokens": 11
   },
   "hn": {
-   "openMs": 309,
+   "openMs": 462,
    "openOutTokens": 14,
-   "snapMs": 62,
-   "bytes": 25883,
-   "tokens": 7004,
-   "iBytes": 13358,
-   "iTokens": 4700
+   "snapMs": 119,
+   "bytes": 25979,
+   "tokens": 7021,
+   "iBytes": 13455,
+   "iTokens": 4717
   },
   "wiki": {
-   "openMs": 1368,
+   "openMs": 1253,
    "openOutTokens": 19,
-   "snapMs": 550,
-   "bytes": 307798,
-   "tokens": 71805,
-   "iBytes": 67630,
-   "iTokens": 25370
+   "snapMs": 943,
+   "bytes": 308295,
+   "tokens": 71917,
+   "iBytes": 67903,
+   "iTokens": 25435
   },
   "books": {
-   "openMs": 902,
+   "openMs": 995,
    "openOutTokens": 21,
-   "snapMs": 46,
+   "snapMs": 98,
    "bytes": 21466,
    "tokens": 5408,
    "iBytes": 5606,
    "iTokens": 1962
   },
   "mdn": {
-   "openMs": 539,
+   "openMs": 1066,
    "openOutTokens": 31,
-   "snapMs": 375,
-   "bytes": 101307,
-   "tokens": 24648,
-   "iBytes": 32649,
-   "iTokens": 10682
+   "snapMs": 415,
+   "bytes": 101353,
+   "tokens": 24651,
+   "iBytes": 32672,
+   "iTokens": 10683
   }
  },
  "tasks": {
@@ -64,69 +64,68 @@
    "calls": 8,
    "outTokens": 518,
    "inTokens": 113,
-   "ms": 118,
+   "ms": 249,
    "retries": 0,
    "trace": [
-    "open(http://127.0.0.1:18081/form.html) 37ms 20tok",
-    "snap(i) 13ms 138tok",
-    "fill(@e2936, Ada) 9ms 3tok",
-    "select(@e2937, Pro) 8ms 3tok",
-    "click(@e2934) 14ms 3tok",
-    "click(@e2935) 18ms 3tok",
-    "snap(i) 9ms 140tok",
-    "snap(full) 10ms 208tok"
+    "open(http://127.0.0.1:18081/form.html) 74ms 20tok",
+    "snap(i) 35ms 138tok",
+    "fill(@e2939, Ada) 25ms 3tok",
+    "select(@e2940, Pro) 15ms 3tok",
+    "click(@e2937) 16ms 3tok",
+    "click(@e2938) 35ms 3tok",
+    "snap(i) 24ms 140tok",
+    "snap(full) 25ms 208tok"
    ]
   },
   "hn-comments": {
    "ok": true,
    "calls": 4,
-   "outTokens": 55938,
+   "outTokens": 19039,
    "inTokens": 54,
-   "ms": 1291,
+   "ms": 1538,
    "retries": 0,
    "trace": [
-    "open(https://news.ycombinator.com/) 116ms 14tok",
-    "snap(i) 68ms 5021tok",
-    "click(@e3055) 19ms 3tok",
-    "snap(i) 1087ms 50900tok"
+    "open(https://news.ycombinator.com/) 276ms 14tok",
+    "snap(i) 127ms 5038tok",
+    "click(@e3058) 33ms 3tok",
+    "snap(i) 1101ms 13984tok"
    ]
   },
   "books-paginate": {
    "ok": true,
-   "calls": 7,
-   "outTokens": 6975,
-   "inTokens": 89,
-   "ms": 785,
-   "retries": 1,
+   "calls": 6,
+   "outTokens": 5502,
+   "inTokens": 78,
+   "ms": 1279,
+   "retries": 0,
    "trace": [
-    "open(https://books.toscrape.com/) 161ms 21tok",
-    "snap(i) 50ms 1962tok",
-    "click(@e5618) 27ms 3tok",
-    "snap(i) 186ms 1473tok",
-    "snap(i) 63ms 2005tok",
-    "click(@e5851) 30ms 3tok",
-    "snap(i) 268ms 1508tok"
+    "open(https://books.toscrape.com/) 362ms 21tok",
+    "snap(i) 106ms 1962tok",
+    "click(@e3908) 38ms 3tok",
+    "snap(i) 371ms 2005tok",
+    "click(@e4042) 59ms 3tok",
+    "snap(i) 343ms 1508tok"
    ]
   },
   "wiki-search": {
    "ok": true,
    "calls": 5,
-   "outTokens": 21713,
+   "outTokens": 3712,
    "inTokens": 59,
-   "ms": 1474,
+   "ms": 2260,
    "retries": 0,
    "trace": [
-    "open(https://en.wikipedia.org/wiki/Special:Se) 271ms 17tok",
-    "snap(i) 41ms 860tok",
-    "fillSubmit(@e6026, Gaziantep) 16ms 6tok",
-    "snap(i) 1145ms 20830tok"
+    "open(https://en.wikipedia.org/wiki/Special:Se) 811ms 17tok",
+    "snap(i) 387ms 586tok",
+    "fillSubmit(@e4300, Gaziantep) 118ms 6tok",
+    "snap(i) 944ms 3103tok"
    ]
   }
  },
  "latency": {
-  "openFormMs": 42,
-  "clickMs": 17,
-  "clickRef": "@e2924"
+  "openFormMs": 96,
+  "clickMs": 35,
+  "clickRef": "@e2927"
  },
- "coldStartMs": 1125
+ "coldStartMs": 2496
 }

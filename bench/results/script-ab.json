@@ -5,7 +5,7 @@
   "form": {
    "ok": true,
    "calls": 1,
-   "ms": 385,
+   "ms": 400,
    "inTokens": 41,
    "outTokens": 39,
    "out": "✓ Fixture Form\n  http://127.0.0.1:18081/form.html\n\n✓ Done\n\n✓ Done\n\n✓ Done\n\n✓ Done\n\nHello Ada / pro / true\n"
@@ -13,11 +13,11 @@
   "books": {
    "ok": true,
    "calls": 1,
-   "ms": 435,
+   "ms": 534,
    "inTokens": 65,
    "outTokens": 101,
    "out": "✓ All products | Books to Scrape - Sandbox\n  https://books.toscrape.com/\n\n✓ Done\n\n✓ Done\n\n✓ Done\n\n✓ Done\n\nhttps://books.toscrape.com/catalogue/category/books/mystery_3/page-2.html\n\n\"[\\\"The Mysterious Affair at Styles (Hercule Poirot #1)\\\",\\\"In the Woods (Dublin Murder Squad #1)\\\",\\\"The Silkworm (Cormoran Strike #2)\\\"]\"\n"
   }
  },
- "coldStartMs": 1448
+ "coldStartMs": 1985
 }

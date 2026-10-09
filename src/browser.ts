@@ -211,7 +211,7 @@ export class Browser {
     const end = since + timeoutMs;
     while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(10);
     await this.pageReady(since);
-    tab.refs = newRefTable();
+    tab.refs = newRefTable(); tab.last = undefined;
     return this.info();
   }
 
@@ -297,7 +297,7 @@ export class Browser {
       if (!healed.length && ref.name && !ref.el.owner && TEXT_ROLES.includes(ref.role))
         for (const r of TEXT_ROLES) if (r !== ref.role && (healed = await this.queryAX(ref.name, r)).length) break;
       // One match: that is it. Several (a re-render can duplicate names): the same position among them as at snapshot time.
-      const pick = healed.length === 1 ? healed[0] : healed.length > 1 && ref.ord !== undefined ? healed[ref.ord] : undefined;
+      const pick = healed.length === 1 ? healed[0] : healed.length > 1 ? healed[Math.min(ref.ord ?? 0, healed.length - 1)] : undefined;
       if (pick !== undefined) {
         tab.refs.byBackend.delete(elKey(ref.el));
         ref.el = top(pick);
@@ -413,6 +413,7 @@ export class Browser {
     let scrolled = false;
     // A page still loading scripts may be about to hydrate (and replace) the target: give it up to 500 ms of quiet first.
     await this.networkIdle(50, 500);
+    let goneSince: number | undefined;
     let verify = false; // refs are trusted first (saves two round trips); a detached node takes the self-healing path
     while (true) {
       try {
@@ -450,7 +451,9 @@ export class Browser {
         if (reason === "not visible" || reason === "detached") scrolled = false;
       } catch (e: any) {
         reason = e?.message ?? String(e);
-        if (/is gone from the page|unknown ref/.test(reason)) throw e;
+        if (/unknown ref/.test(reason)) throw e;
+        // A ref whose node vanished may be mid re-render (e.g. a lazily hydrated widget): keep healing, but not for long.
+        if (/is gone from the page/.test(reason) && Date.now() > Math.min(end, goneSince ??= Date.now() + 2000)) throw e;
         if (!verify) { verify = true; continue; }
       }
       if (Date.now() > end) throw new Error(`${target}: ${reason} (waited ${opts.timeoutMs ?? this.actionTimeout} ms)`);
@@ -484,7 +487,7 @@ export class Browser {
       if (tab.navAt >= since) {
         const navEnd = Date.now() + 15_000;
         while (tab.loadAt < tab.navAt && Date.now() < navEnd) await sleep(10);
-        tab.refs = newRefTable();
+        tab.refs = newRefTable(); tab.last = undefined;
         await this.pageReady(tab.navAt);
         return;
       }

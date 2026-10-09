@@ -138,13 +138,15 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
   let refCount = 0;
 
   const ords = new Map<string, number>();
+  const seen = new Map<string, number>();
   const refFor = (backendNodeId: number, role: string, name: string) => {
     const el: El = { sid: curSid, bid: backendNodeId, owner: curOwner };
     const key = elKey(el);
     let r = refs.byBackend.get(key);
     if (!r) { r = refs.next++; refs.byBackend.set(key, r); }
-    const ok = `${curSid}|${role}|${name}`;
-    const ord = ords.get(ok) ?? 0; ords.set(ok, ord + 1);
+    // Ordinal among same role+name, counted once per node (inline rendering may visit a node twice).
+    let ord = seen.get(key);
+    if (ord === undefined) { const ok = `${curSid}|${role}|${name}`; ord = ords.get(ok) ?? 0; ords.set(ok, ord + 1); seen.set(key, ord); }
     refs.byRef.set(r, { el, role, name, ord });
     refCount++;
     return r;
