@@ -195,7 +195,8 @@ export class Browser {
     if (res.errorText) throw new Error(`navigation failed: ${res.errorText} (${url})`);
     const end = since + timeoutMs;
     while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(10);
-    await this.networkIdle(50, 4000);
+    // After DOMContentLoaded allow up to 1 s of script/XHR quiet; ad and analytics chatter must not stall every goto.
+    await this.networkIdle(50, 1000);
     tab.refs = newRefTable();
     return this.info();
   }
@@ -265,7 +266,7 @@ export class Browser {
    * Resolve a target to a backendNodeId. Accepts `@N` refs, `text=Label`, `role=button[:name]`, or CSS.
    * Refs self-heal: if the ref'd node was re-rendered, it is re-found by its role + accessible name.
    */
-  async resolve(target: string): Promise<El> {
+  async resolve(target: string, verify = true): Promise<El> {
     const tab = this.tab();
     const top = (bid: number): El => ({ sid: tab.sessionId, bid });
     const t = target.trim();
@@ -274,7 +275,7 @@ export class Browser {
       const n = Number(m[1]);
       const ref = tab.refs.byRef.get(n);
       if (!ref) throw new Error(`unknown ref @${n} — take a fresh snapshot`);
-      if (await this.isAttached(ref.el)) return ref.el;
+      if (!verify || await this.isAttached(ref.el)) return ref.el;
       // Self-heal by role + name (top document only).
       const healed = ref.name && !ref.el.owner ? await this.queryAX(ref.name, ref.role === "clickable" ? undefined : ref.role) : [];
       if (healed.length === 1) {
@@ -390,9 +391,10 @@ export class Browser {
     const end = Date.now() + (opts.timeoutMs ?? this.actionTimeout);
     let reason = "not found";
     let scrolled = false;
+    let verify = false; // refs are trusted first (saves two round trips); a detached node takes the self-healing path
     while (true) {
       try {
-        const id = await this.resolve(target);
+        const id = await this.resolve(target, verify);
         if (!scrolled) { await this.scrollIntoView(id); scrolled = true; }
         // One round trip does every check in the element's own document and returns the point to act on
         // (viewport coordinates of that document). Stability: only elements with running animations wait a frame.
@@ -422,10 +424,12 @@ export class Browser {
           return { id, x: r.x + org.x, y: r.y + org.y };
         }
         reason = r?.s ?? "not found";
+        if (reason === "detached" && !verify) { verify = true; scrolled = false; continue; }
         if (reason === "not visible" || reason === "detached") scrolled = false;
       } catch (e: any) {
         reason = e?.message ?? String(e);
         if (/is gone from the page|unknown ref/.test(reason)) throw e;
+        if (!verify) { verify = true; continue; }
       }
       if (Date.now() > end) throw new Error(`${target}: ${reason} (waited ${opts.timeoutMs ?? this.actionTimeout} ms)`);
       await sleep(reason === "still moving" ? 0 : 50);
@@ -445,19 +449,29 @@ export class Browser {
     await this.settle(before);
   }
 
-  /** After an action: if it started a main-frame navigation, wait for load; then wait for network quiet. */
+  /**
+   * After an action: if it started a main-frame navigation (now or within the quiet window), wait for the new
+   * document's DOMContentLoaded plus a short quiet window; otherwise wait until the action's own traffic settles.
+   * An action that causes nothing returns after a 20 ms grace period, long enough for submit handlers to navigate.
+   */
   async settle(since: number) {
     const tab = this.tab();
-    await sleep(15);
-    if (tab.navAt >= since) {
-      // Navigation: same contract as goto — the load event, then a short quiet window for late XHR.
-      const end = Date.now() + 15_000;
-      while (tab.loadAt < tab.navAt && Date.now() < end) await sleep(10);
-      tab.refs = newRefTable();
-      await this.networkIdle(50, 3000);
-      return;
+    const end = Date.now() + 3000;
+    while (Date.now() < end) {
+      await sleep(10);
+      if (tab.navAt >= since) {
+        const navEnd = Date.now() + 15_000;
+        while (tab.loadAt < tab.navAt && Date.now() < navEnd) await sleep(10);
+        tab.refs = newRefTable();
+        await this.networkIdle(50, 1000);
+        return;
+      }
+      const now = Date.now();
+      let active = 0;
+      for (const [, t] of tab.inflight) if (t >= since && now - t < STALE_MS) active++;
+      const last = Math.max(since, tab.lastNet);
+      if (active === 0 && now - last >= (tab.lastNet >= since ? 150 : 20)) return;
     }
-    await this.networkIdle(150, 3000, since);
   }
 
   async fill(target: string, text: string) {

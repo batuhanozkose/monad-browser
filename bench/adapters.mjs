@@ -4,6 +4,10 @@ import { readFileSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const MB = new URL("../dist/cli.js", import.meta.url).pathname;
+// Native thin clients, as a global install runs them (no Node wrapper per call).
+const ARCH = { x64: "amd64", arm64: "arm64" }[process.arch];
+const MB_NATIVE = new URL(`../bin/native/mb-${process.platform}-${ARCH}`, import.meta.url).pathname;
+const AB_NATIVE = new URL(`./node_modules/agent-browser/bin/agent-browser-${process.platform}-${process.arch}`, import.meta.url).pathname;
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const nameRe = (n) => (n instanceof RegExp ? n : new RegExp(`^\\s*${esc(n)}\\s*$`, "i"));
 
@@ -39,7 +43,7 @@ function findCDT(text, role, name) {
 // ---------- monad (CLI) ----------
 export function monadCli() {
   const env = { MONAD_CHROME: CHROME, MONAD_NO_SANDBOX: "1", MONAD_PROXY: PROXY, MONAD_SESSION: "bench" };
-  const run = (...a) => sh(process.execPath, [MB, ...a], { env });
+  const run = (...a) => sh(MB_NATIVE, a, { env: { ...env, MONAD_NODE_CLI: MB } });
   return {
     name: "monad-browser (CLI)", kind: "cli", actionsReturnPage: true, find: findMonad,
     start: () => run("open", "https://example.com"),
@@ -77,7 +81,7 @@ export function monadMcp() {
 // ---------- agent-browser (Vercel) ----------
 export function agentBrowser() {
   const env = { AGENT_BROWSER_EXECUTABLE_PATH: CHROME, AGENT_BROWSER_ARGS: "--no-sandbox", AGENT_BROWSER_PROXY: PROXY, AGENT_BROWSER_PROXY_BYPASS: "127.0.0.1,localhost", AGENT_BROWSER_SESSION: "bench" };
-  const run = (...a) => sh(BIN + "agent-browser", a, { env, input: a[0] === "batch" ? undefined : undefined });
+  const run = (...a) => sh(AB_NATIVE, a, { env });
   return {
     name: "agent-browser", kind: "cli", actionsReturnPage: false, find: findAB, snapMode: "i",
     start: () => run("open", "https://example.com"),
@@ -88,7 +92,7 @@ export function agentBrowser() {
     fillSubmit: async (r, t) => { const a = await run("fill", r, t); const b = await run("press", "Enter"); return { ms: a.ms + b.ms, out: a.out + b.out, calls: 2 }; },
     select: (r, v) => run("select", r, v),
     url: async () => (await run("get", "url")).out,
-    script: (cmds) => sh(BIN + "agent-browser", ["batch", "--bail", ...cmds], { env }),
+    script: (cmds) => sh(AB_NATIVE, ["batch", "--bail", ...cmds], { env }),
     stop: () => run("close"),
   };
 }
