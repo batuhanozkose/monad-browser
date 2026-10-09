@@ -74,7 +74,7 @@ export const COMMANDS: Record<string, Cmd> = {
     async run(ctx, args, flags) {
       need(args, 2, this.usage);
       await ctx.browser.fill(args[0], args.slice(1).join(" "));
-      if (flags.submit) await ctx.browser.press("Enter");
+      if (flags.submit) await ctx.browser.submit(args[0]);
       return maybeSnap(ctx, flags, `ok filled ${args[0]}`);
     },
   },

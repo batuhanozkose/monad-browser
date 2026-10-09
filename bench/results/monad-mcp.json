@@ -1,90 +1,89 @@
 {
  "tool": "monad-browser (MCP)",
  "key": "monad-mcp",
- "at": "2026-10-09T18:47:35.635Z",
+ "at": "2026-10-09T18:51:48.470Z",
  "pages": {
   "form": {
-   "openMs": 374,
+   "openMs": 186,
    "openOutTokens": 117,
-   "snapMs": 29,
+   "snapMs": 19,
    "bytes": 251,
    "tokens": 97,
    "iBytes": 202,
    "iTokens": 77
   },
   "example": {
-   "openMs": 272,
+   "openMs": 181,
    "openOutTokens": 241,
-   "snapMs": 18,
+   "snapMs": 17,
    "bytes": 1360,
    "tokens": 231,
    "iBytes": 64,
    "iTokens": 17
   },
   "hn": {
-   "openMs": 787,
+   "openMs": 468,
    "openOutTokens": 2384,
-   "snapMs": 116,
-   "bytes": 6061,
+   "snapMs": 108,
+   "bytes": 6065,
    "tokens": 2369,
-   "iBytes": 4747,
+   "iBytes": 4751,
    "iTokens": 1777
   },
   "wiki": {
-   "openMs": 2969,
-   "openOutTokens": 31128,
-   "snapMs": 1059,
-   "bytes": 102912,
-   "tokens": 31025,
-   "iBytes": 26440,
-   "iTokens": 10303
+   "openMs": 2123,
+   "openOutTokens": 31052,
+   "snapMs": 988,
+   "bytes": 100775,
+   "tokens": 30502,
+   "iBytes": 26078,
+   "iTokens": 10175
   },
   "books": {
-   "openMs": 1059,
+   "openMs": 1012,
    "openOutTokens": 2561,
-   "snapMs": 74,
+   "snapMs": 83,
    "bytes": 6407,
    "tokens": 2540,
    "iBytes": 2650,
    "iTokens": 925
   },
   "mdn": {
-   "openMs": 1994,
-   "openOutTokens": 6248,
-   "snapMs": 485,
-   "bytes": 39772,
-   "tokens": 11643,
-   "iBytes": 11559,
+   "openMs": 1802,
+   "openOutTokens": 6493,
+   "snapMs": 364,
+   "bytes": 39777,
+   "tokens": 11644,
+   "iBytes": 11553,
    "iTokens": 3912
   }
  },
  "tasks": {
   "form": {
    "ok": true,
-   "calls": 6,
-   "outTokens": 413,
-   "inTokens": 83,
-   "ms": 259,
+   "calls": 5,
+   "outTokens": 353,
+   "inTokens": 72,
+   "ms": 235,
    "retries": 0,
    "trace": [
-    "open(http://127.0.0.1:18081/form.html) 110ms 80tok",
-    "snap(full) 11ms 97tok",
-    "fill(@3, Ada) 53ms 63tok",
-    "select(@4, Pro) 9ms 3tok",
-    "click(@5) 35ms 109tok",
-    "click(@6) 41ms 61tok"
+    "open(http://127.0.0.1:18081/form.html) 70ms 117tok",
+    "fill(@3, Ada) 65ms 63tok",
+    "select(@4, Pro) 19ms 3tok",
+    "click(@5) 42ms 109tok",
+    "click(@6) 39ms 61tok"
    ]
   },
   "hn-comments": {
    "ok": true,
    "calls": 2,
-   "outTokens": 36432,
+   "outTokens": 36635,
    "inTokens": 30,
-   "ms": 2400,
+   "ms": 2129,
    "retries": 0,
    "trace": [
-    "open(https://news.ycombinator.com/) 412ms 2384tok",
-    "click(@17) 1988ms 34048tok"
+    "open(https://news.ycombinator.com/) 278ms 2384tok",
+    "click(@17) 1851ms 34251tok"
    ]
   },
   "books-paginate": {
@@ -92,33 +91,33 @@
    "calls": 3,
    "outTokens": 7100,
    "inTokens": 41,
-   "ms": 1452,
+   "ms": 1226,
    "retries": 0,
    "trace": [
-    "open(https://books.toscrape.com/) 430ms 2561tok",
-    "click(@5) 535ms 2620tok",
-    "click(@115) 488ms 1919tok"
+    "open(https://books.toscrape.com/) 389ms 2561tok",
+    "click(@5) 512ms 2620tok",
+    "click(@115) 326ms 1919tok"
    ]
   },
   "wiki-search": {
    "ok": false,
    "calls": 2,
-   "outTokens": 363,
+   "outTokens": 706,
    "inTokens": 35,
-   "ms": 1534,
+   "ms": 1885,
    "retries": 0,
    "trace": [
-    "open(https://en.wikipedia.org/wiki/Special:Se) 685ms 344tok",
-    "fillSubmit(@3, Gaziantep) 849ms 19tok"
+    "open(https://en.wikipedia.org/wiki/Special:Se) 581ms 344tok",
+    "fillSubmit(@3, Gaziantep) 1304ms 362tok"
    ]
   }
  },
  "latency": {
-  "openFormMs": 106,
-  "clickMs": 38,
+  "openFormMs": 77,
+  "clickMs": 30,
   "clickRef": "@5"
  },
- "coldStartMs": 1939,
+ "coldStartMs": 1194,
  "mcp": {
   "tools": 10,
   "schemaTokens": 761

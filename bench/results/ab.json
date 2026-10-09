@@ -1,60 +1,60 @@
 {
  "tool": "agent-browser",
  "key": "ab",
- "at": "2026-10-09T18:48:03.172Z",
+ "at": "2026-10-09T18:52:09.532Z",
  "pages": {
   "form": {
-   "openMs": 253,
+   "openMs": 252,
    "openOutTokens": 20,
-   "snapMs": 129,
+   "snapMs": 87,
    "bytes": 542,
    "tokens": 177,
    "iBytes": 367,
    "iTokens": 128
   },
   "example": {
-   "openMs": 201,
+   "openMs": 205,
    "openOutTokens": 10,
-   "snapMs": 27,
+   "snapMs": 21,
    "bytes": 1489,
    "tokens": 267,
    "iBytes": 30,
    "iTokens": 11
   },
   "hn": {
-   "openMs": 462,
+   "openMs": 348,
    "openOutTokens": 14,
-   "snapMs": 119,
-   "bytes": 25979,
-   "tokens": 7021,
-   "iBytes": 13455,
-   "iTokens": 4717
+   "snapMs": 85,
+   "bytes": 25987,
+   "tokens": 7023,
+   "iBytes": 13463,
+   "iTokens": 4719
   },
   "wiki": {
-   "openMs": 1253,
+   "openMs": 1441,
    "openOutTokens": 19,
-   "snapMs": 943,
+   "snapMs": 736,
    "bytes": 308295,
    "tokens": 71917,
    "iBytes": 67903,
    "iTokens": 25435
   },
   "books": {
-   "openMs": 995,
+   "openMs": 1003,
    "openOutTokens": 21,
-   "snapMs": 98,
+   "snapMs": 57,
    "bytes": 21466,
    "tokens": 5408,
    "iBytes": 5606,
    "iTokens": 1962
   },
   "mdn": {
-   "openMs": 1066,
+   "openMs": 1129,
    "openOutTokens": 31,
-   "snapMs": 415,
-   "bytes": 101353,
-   "tokens": 24651,
-   "iBytes": 32672,
+   "snapMs": 322,
+   "bytes": 101279,
+   "tokens": 24650,
+   "iBytes": 32635,
    "iTokens": 10683
   }
  },
@@ -64,68 +64,69 @@
    "calls": 8,
    "outTokens": 518,
    "inTokens": 113,
-   "ms": 249,
+   "ms": 200,
    "retries": 0,
    "trace": [
-    "open(http://127.0.0.1:18081/form.html) 74ms 20tok",
-    "snap(i) 35ms 138tok",
-    "fill(@e2939, Ada) 25ms 3tok",
-    "select(@e2940, Pro) 15ms 3tok",
-    "click(@e2937) 16ms 3tok",
-    "click(@e2938) 35ms 3tok",
-    "snap(i) 24ms 140tok",
-    "snap(full) 25ms 208tok"
+    "open(http://127.0.0.1:18081/form.html) 60ms 20tok",
+    "snap(i) 21ms 138tok",
+    "fill(@e2935, Ada) 12ms 3tok",
+    "select(@e2936, Pro) 10ms 3tok",
+    "click(@e2933) 31ms 3tok",
+    "click(@e2934) 32ms 3tok",
+    "snap(i) 19ms 140tok",
+    "snap(full) 16ms 208tok"
    ]
   },
   "hn-comments": {
    "ok": true,
    "calls": 4,
-   "outTokens": 19039,
+   "outTokens": 28171,
    "inTokens": 54,
-   "ms": 1538,
+   "ms": 1111,
    "retries": 0,
    "trace": [
-    "open(https://news.ycombinator.com/) 276ms 14tok",
-    "snap(i) 127ms 5038tok",
-    "click(@e3058) 33ms 3tok",
-    "snap(i) 1101ms 13984tok"
+    "open(https://news.ycombinator.com/) 183ms 14tok",
+    "snap(i) 109ms 5040tok",
+    "click(@e3054) 42ms 3tok",
+    "snap(i) 777ms 23114tok"
    ]
   },
   "books-paginate": {
    "ok": true,
-   "calls": 6,
-   "outTokens": 5502,
-   "inTokens": 78,
-   "ms": 1279,
-   "retries": 0,
+   "calls": 7,
+   "outTokens": 7147,
+   "inTokens": 89,
+   "ms": 1143,
+   "retries": 1,
    "trace": [
-    "open(https://books.toscrape.com/) 362ms 21tok",
-    "snap(i) 106ms 1962tok",
-    "click(@e3908) 38ms 3tok",
-    "snap(i) 371ms 2005tok",
-    "click(@e4042) 59ms 3tok",
-    "snap(i) 343ms 1508tok"
+    "open(https://books.toscrape.com/) 263ms 21tok",
+    "snap(i) 65ms 1962tok",
+    "click(@e4328) 26ms 3tok",
+    "snap(i) 290ms 1645tok",
+    "snap(i) 83ms 2005tok",
+    "click(@e4571) 47ms 3tok",
+    "snap(i) 369ms 1508tok"
    ]
   },
   "wiki-search": {
    "ok": true,
    "calls": 5,
-   "outTokens": 3712,
+   "outTokens": 26761,
    "inTokens": 59,
-   "ms": 2260,
+   "ms": 2915,
    "retries": 0,
    "trace": [
-    "open(https://en.wikipedia.org/wiki/Special:Se) 811ms 17tok",
-    "snap(i) 387ms 586tok",
-    "fillSubmit(@e4300, Gaziantep) 118ms 6tok",
-    "snap(i) 944ms 3103tok"
+    "open(https://en.wikipedia.org/wiki/Special:Se) 601ms 17tok",
+    "snap(i) 140ms 392tok",
+    "fillSubmit(@e4720, Gaziantep) 254ms 6tok",
+    "snap(i) 1919ms 26346tok"
    ]
   }
  },
  "latency": {
-  "openFormMs": 96,
-  "clickMs": 35,
-  "clickRef": "@e2927"
+  "openFormMs": 70,
+  "clickMs": 18,
+  "clickRef": "@e2923"
  },
- "coldStartMs": 2496
+ "coldStartMs": 1276
 }

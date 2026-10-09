@@ -533,6 +533,23 @@ export class Browser {
     }
   }
 
+  /**
+   * Press Enter in a field, as a user submitting it. Widgets sometimes swallow that Enter (autocomplete menus):
+   * if nothing navigated within 500 ms and the field sits in a real <form action>, submit that form.
+   */
+  async submit(target: string) {
+    const tab = this.tab();
+    const before = Date.now();
+    await this.press("Enter");
+    if (tab.navAt >= before) return;
+    const end = Date.now() + 500;
+    while (Date.now() < end && tab.navAt < before) await sleep(20);
+    if (tab.navAt >= before) { await this.settle(before); return; }
+    const el = await this.resolve(target).catch(() => null);
+    const sent = el && await this.callOn(el, "function(){ const f = this.form; if (!f || !f.getAttribute('action')) return false; f.requestSubmit(); return true; }").catch(() => false);
+    if (sent) await this.settle(before);
+  }
+
   async type(text: string, target?: string) {
     if (target) { const id = await this.resolve(target); await this.callOn(id, "function(){ this.focus(); }"); }
     await this.send("Input.insertText", { text });
