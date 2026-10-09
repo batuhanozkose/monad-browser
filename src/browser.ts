@@ -2,7 +2,7 @@
 import { CDP } from "./cdp.js";
 import { launchChrome, resolveCdpEndpoint, cleanupProfile, type LaunchedChrome } from "./chrome.js";
 import { renderDiff } from "./diff.js";
-import { takeSnapshot, newRefTable, type RefTable, type SnapshotOptions } from "./snapshot.js";
+import { takeSnapshot, newRefTable, elKey, type El, type RefTable, type SnapshotOptions } from "./snapshot.js";
 import { KEYS, modifierBit } from "./keys.js";
 
 export type BrowserOptions = {
@@ -14,6 +14,7 @@ export type BrowserOptions = {
 type Tab = {
   targetId: string; sessionId: string; refs: RefTable; inflight: Map<string, number>; lastNet: number; url: string; title: string;
   mainFrame?: string; navAt: number; loadAt: number;
+  oopifs: Map<string, string>; // out-of-process iframe frameId → its CDP session
   last?: { key: string; lines: string[] };
 };
 
@@ -78,7 +79,7 @@ export class Browser {
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0 };
+    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0, oopifs: new Map() };
     this.tabs.set(targetId, tab);
     const s = sessionId;
     const on = (ev: string, fn: (p: any) => void) => this.cdp.on(ev, (p, sid) => { if (sid === s) fn(p); });
@@ -117,7 +118,9 @@ export class Browser {
                         : this.cdp.send("Fetch.continueRequest", { requestId: p.requestId }, s);
       cmd.catch(() => {});
     });
+    this.watchFrames(tab, s);
     await Promise.all([
+      this.cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, s).catch(() => {}),
       this.cdp.send("Page.enable", {}, s),
       this.cdp.send("Runtime.enable", {}, s),
       this.cdp.send("Network.enable", {}, s),
@@ -130,6 +133,27 @@ export class Browser {
     const { targetInfo } = await this.cdp.send("Target.getTargetInfo", { targetId });
     tab.url = targetInfo.url; tab.title = targetInfo.title;
     return tab;
+  }
+
+  /** Cross-origin iframes live in their own renderer: attach to each (recursively) so snapshots and refs reach inside. */
+  private watchFrames(tab: Tab, parentSid: string) {
+    this.cdp.on("Target.attachedToTarget", async (p, sid) => {
+      if (sid !== parentSid || p.targetInfo?.type !== "iframe") return;
+      const child = p.sessionId as string;
+      tab.oopifs.set(p.targetInfo.targetId, child);
+      this.watchFrames(tab, child);
+      await Promise.all([
+        this.cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, child),
+        this.cdp.send("DOM.enable", {}, child),
+        this.cdp.send("Accessibility.enable", {}, child),
+        this.cdp.send("Page.enable", {}, child),
+      ]).catch(() => {});
+      this.cdp.send("Runtime.runIfWaitingForDebugger", {}, child).catch(() => {});
+    });
+    this.cdp.on("Target.detachedFromTarget", (p, sid) => {
+      if (sid !== parentSid) return;
+      for (const [f, c] of tab.oopifs) if (c === p.sessionId) tab.oopifs.delete(f);
+    });
   }
 
   async newTab(url = "about:blank"): Promise<Tab> {
@@ -218,7 +242,7 @@ export class Browser {
   /** Snapshot; with `diff`, only lines that changed since this tab's previous snapshot of the same page. */
   async snapshot(opts: SnapshotOptions & { diff?: boolean } = {}) {
     const tab = this.tab();
-    const res = await takeSnapshot(this.cdp, tab.sessionId, tab.refs, opts);
+    const res = await takeSnapshot(this.cdp, tab.sessionId, tab.refs, opts, tab.oopifs);
     const { url, title } = await this.info();
     const extra: string[] = [];
     if (this.dialogs.length) extra.push(`dialogs: ${this.dialogs.splice(0).join(" | ")}`);
@@ -240,48 +264,50 @@ export class Browser {
    * Resolve a target to a backendNodeId. Accepts `@N` refs, `text=Label`, `role=button[:name]`, or CSS.
    * Refs self-heal: if the ref'd node was re-rendered, it is re-found by its role + accessible name.
    */
-  async resolve(target: string): Promise<number> {
+  async resolve(target: string): Promise<El> {
     const tab = this.tab();
+    const top = (bid: number): El => ({ sid: tab.sessionId, bid });
     const t = target.trim();
     const m = /^@?e?(\d+)$/.exec(t);
     if (m) {
       const n = Number(m[1]);
       const ref = tab.refs.byRef.get(n);
       if (!ref) throw new Error(`unknown ref @${n} — take a fresh snapshot`);
-      if (await this.isAttached(ref.backendNodeId)) return ref.backendNodeId;
-      const healed = ref.name ? await this.queryAX(ref.name, ref.role === "clickable" ? undefined : ref.role) : [];
+      if (await this.isAttached(ref.el)) return ref.el;
+      // Self-heal by role + name (top document only).
+      const healed = ref.name && !ref.el.owner ? await this.queryAX(ref.name, ref.role === "clickable" ? undefined : ref.role) : [];
       if (healed.length === 1) {
-        tab.refs.byBackend.delete(ref.backendNodeId);
-        ref.backendNodeId = healed[0];
-        tab.refs.byBackend.set(healed[0], n);
-        return healed[0];
+        tab.refs.byBackend.delete(elKey(ref.el));
+        ref.el = top(healed[0]);
+        tab.refs.byBackend.set(elKey(ref.el), n);
+        return ref.el;
       }
       throw new Error(`@${n} (${ref.role} "${ref.name}") is gone from the page — take a fresh snapshot`);
     }
     if (t.startsWith("text=")) {
       const ids = await this.queryAX(t.slice(5));
       if (!ids.length) throw new Error(`no element named "${t.slice(5)}"`);
-      return ids[0];
+      return top(ids[0]);
     }
     const rm = /^role=([\w-]+)(?::(.+))?$/.exec(t);
     if (rm) {
       const ids = await this.queryAX(rm[2], rm[1]);
       if (!ids.length) throw new Error(`no ${rm[1]}${rm[2] ? ` named "${rm[2]}"` : ""}`);
-      return ids[0];
+      return top(ids[0]);
     }
     const { root } = await this.send("DOM.getDocument", { depth: 0 });
     const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector: t });
     if (!nodeId) throw new Error(`no element matches selector: ${t}`);
     const { node } = await this.send("DOM.describeNode", { nodeId });
-    return node.backendNodeId;
+    return top(node.backendNodeId);
   }
 
-  private async isAttached(backendNodeId: number) {
+  private async isAttached(el: El) {
     try {
-      const { object } = await this.send("DOM.resolveNode", { backendNodeId });
+      const { object } = await this.cdp.send("DOM.resolveNode", { backendNodeId: el.bid }, el.sid);
       if (!object?.objectId) return false;
-      const r: any = await this.send("Runtime.callFunctionOn", { objectId: object.objectId, functionDeclaration: "function(){return this.isConnected}", returnByValue: true });
-      this.send("Runtime.releaseObject", { objectId: object.objectId }).catch(() => {});
+      const r: any = await this.cdp.send("Runtime.callFunctionOn", { objectId: object.objectId, functionDeclaration: "function(){return this.isConnected}", returnByValue: true }, el.sid);
+      this.cdp.send("Runtime.releaseObject", { objectId: object.objectId }, el.sid).catch(() => {});
       return r.result?.value === true;
     } catch { return false; }
   }
@@ -299,37 +325,56 @@ export class Browser {
     return visible.length ? visible : ids;
   }
 
-  private async objectId(backendNodeId: number) {
-    const { object } = await this.send("DOM.resolveNode", { backendNodeId });
+  private async objectId(el: El) {
+    const { object } = await this.cdp.send("DOM.resolveNode", { backendNodeId: el.bid }, el.sid);
     if (!object?.objectId) throw new Error("element is no longer attached — take a fresh snapshot");
     return object.objectId as string;
   }
 
-  async callOn(backendNodeId: number, fn: string, args: unknown[] = []) {
-    const objectId = await this.objectId(backendNodeId);
-    const r: any = await this.send("Runtime.callFunctionOn", {
+  async callOn(el: El, fn: string, args: unknown[] = []) {
+    const objectId = await this.objectId(el);
+    const r: any = await this.cdp.send("Runtime.callFunctionOn", {
       objectId, functionDeclaration: fn, arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true,
-    });
+    }, el.sid);
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result?.value;
   }
 
-  private async quadCenter(backendNodeId: number): Promise<{ x: number; y: number } | null> {
+  /** Page offset of the viewport that `el`'s session reports coordinates in (non-zero only inside out-of-process iframes). */
+  private async rootOffset(el: El): Promise<{ x: number; y: number }> {
+    let o = el.owner;
+    while (o && o.sid === el.sid) o = o.owner;
+    return o ? this.contentOrigin(o) : { x: 0, y: 0 };
+  }
+  /** Page coordinates of an <iframe> element's content box: where its document's viewport starts. */
+  private async contentOrigin(frameEl: El): Promise<{ x: number; y: number }> {
+    const { model } = await this.cdp.send<any>("DOM.getBoxModel", { backendNodeId: frameEl.bid }, frameEl.sid);
+    const off = await this.rootOffset(frameEl);
+    return { x: model.content[0] + off.x, y: model.content[1] + off.y };
+  }
+  private async scrollIntoView(el: El) {
+    const chain: El[] = [];
+    for (let o = el.owner; o; o = o.owner) chain.unshift(o);
+    for (const e of [...chain, el]) await this.cdp.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: e.bid }, e.sid).catch(() => {});
+  }
+
+  private async quadCenter(el: El): Promise<{ x: number; y: number } | null> {
     try {
-      const { quads } = await this.send("DOM.getContentQuads", { backendNodeId });
+      const { quads } = await this.cdp.send<any>("DOM.getContentQuads", { backendNodeId: el.bid }, el.sid);
       if (!quads?.length) return null;
       // Largest quad wins (wrapped inline links have several).
       let best = quads[0], area = 0;
       for (const q of quads) { const a = Math.abs((q[2] - q[0]) * (q[5] - q[1])); if (a > area) { area = a; best = q; } }
       if (area < 1) return null;
-      return { x: (best[0] + best[2] + best[4] + best[6]) / 4, y: (best[1] + best[3] + best[5] + best[7]) / 4 };
+      const off = el.sid === this.tab().sessionId ? { x: 0, y: 0 } : await this.rootOffset(el);
+      return { x: (best[0] + best[2] + best[4] + best[6]) / 4 + off.x, y: (best[1] + best[3] + best[5] + best[7]) / 4 + off.y };
     } catch { return null; }
   }
 
-  private async center(backendNodeId: number): Promise<{ x: number; y: number }> {
-    await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId }).catch(() => {});
+  private async center(el: El): Promise<{ x: number; y: number }> {
+    await this.scrollIntoView(el);
     for (let i = 0; i < 20; i++) {
-      const c = await this.quadCenter(backendNodeId);
+      const c = await this.quadCenter(el);
       if (c) return c;
       await sleep(100);
     }
@@ -340,7 +385,7 @@ export class Browser {
    * Auto-wait until the element can receive input: attached, visible, stable (not animating),
    * enabled, and not covered by another element at its center. Returns the point to act on.
    */
-  async actionable(target: string, opts: { timeoutMs?: number; enabled?: boolean; hitTest?: boolean } = {}): Promise<{ id: number; x: number; y: number }> {
+  async actionable(target: string, opts: { timeoutMs?: number; enabled?: boolean; hitTest?: boolean } = {}): Promise<{ id: El; x: number; y: number }> {
     const end = Date.now() + (opts.timeoutMs ?? this.actionTimeout);
     let reason = "not found";
     let last: { x: number; y: number } | null = null;
@@ -348,11 +393,13 @@ export class Browser {
     while (true) {
       try {
         const id = await this.resolve(target);
-        if (!scrolled) { await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: id }).catch(() => {}); scrolled = true; }
+        if (!scrolled) { await this.scrollIntoView(id); scrolled = true; }
         const c = await this.quadCenter(id);
         if (!c) { reason = "not visible"; scrolled = false; }
         else if (!last || Math.abs(last.x - c.x) > 0.5 || Math.abs(last.y - c.y) > 0.5) { reason = "still moving"; last = c; await sleep(16); continue; }
         else {
+          // Hit-test in the element's own document: page point minus its frame's viewport origin.
+          const org = id.owner ? await this.contentOrigin(id.owner) : { x: 0, y: 0 };
           const state = await this.callOn(id, `function(x, y, hit, needEnabled){
             const el = this;
             if (needEnabled && (el.disabled || el.closest('[aria-disabled="true"],fieldset[disabled]'))) return 'disabled';
@@ -366,7 +413,7 @@ export class Browser {
             if (lab) return 'ok';
             const d = e.closest('[role],button,a,input,dialog') || e;
             return 'covered by ' + d.tagName.toLowerCase() + (d.id ? '#' + d.id : '') + (d.className && typeof d.className === 'string' ? '.' + d.className.trim().split(/\\s+/)[0] : '') + ' "' + (d.innerText || '').trim().slice(0, 40) + '"';
-          }`, [c.x, c.y, opts.hitTest !== false, opts.enabled !== false]);
+          }`, [c.x - org.x, c.y - org.y, opts.hitTest !== false, opts.enabled !== false]);
           if (state === "ok") return { id, ...c };
           reason = state;
         }
@@ -478,9 +525,10 @@ export class Browser {
     if (opts.format === "jpeg") params.quality = opts.quality ?? 70;
     if (opts.target) {
       const id = await this.resolve(opts.target);
-      await this.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: id }).catch(() => {});
-      const { model } = await this.send("DOM.getBoxModel", { backendNodeId: id });
-      const xs = model.border.filter((_: number, i: number) => i % 2 === 0), ys = model.border.filter((_: number, i: number) => i % 2 === 1);
+      await this.scrollIntoView(id);
+      const { model } = await this.cdp.send<any>("DOM.getBoxModel", { backendNodeId: id.bid }, id.sid);
+      const off = id.sid === this.tab().sessionId ? { x: 0, y: 0 } : await this.rootOffset(id);
+      const xs = model.border.filter((_: number, i: number) => i % 2 === 0).map((v: number) => v + off.x), ys = model.border.filter((_: number, i: number) => i % 2 === 1).map((v: number) => v + off.y);
       params.clip = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), scale: 1 };
     } else if (opts.fullPage) {
       const m = await this.send("Page.getLayoutMetrics");

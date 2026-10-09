@@ -12,9 +12,13 @@ const TRANSPARENT_ROLES = new Set(["generic", "GenericContainer", "group", "Sect
 const STRUCTURAL_KEEP = new Set(["heading", "navigation", "main", "form", "dialog", "alertdialog", "alert", "list", "table", "row", "banner", "contentinfo", "search", "complementary", "menu", "menubar", "tablist", "tree", "grid", "img", "image", "status"]);
 const STATE_PROPS = ["checked", "selected", "expanded", "pressed", "disabled", "required", "invalid", "readonly", "focused", "level", "valuetext"];
 
+/** A DOM node: the CDP session that owns it, its backend id, and the <iframe> hosting its document (none = top document). */
+export type El = { sid: string; bid: number; owner?: El };
+export const elKey = (e: El) => `${e.sid}:${e.bid}`;
+
 export type RefTable = {
-  byBackend: Map<number, number>;
-  byRef: Map<number, { backendNodeId: number; role: string; name: string }>;
+  byBackend: Map<string, number>;
+  byRef: Map<number, { el: El; role: string; name: string }>;
   next: number;
 };
 export const newRefTable = (): RefTable => ({ byBackend: new Map(), byRef: new Map(), next: 1 });
@@ -59,21 +63,84 @@ async function domInfo(cdp: CDP, sessionId: string): Promise<Map<number, DomInfo
   return out;
 }
 
-export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, opts: SnapshotOptions = {}): Promise<{ text: string; refCount: number; lines: number }> {
+type Doc = { sid: string; owner?: El; nodes: AXNode[]; byId: Map<string, AXNode>; dom: Map<number, DomInfo> };
+
+/**
+ * Load the top document plus every iframe document, same-process (by frameId) or out-of-process
+ * (its own session from `oopifs`), keyed by the hosting <iframe> element.
+ */
+async function loadDocs(cdp: CDP, mainSid: string, oopifs: Map<string, string>) {
+  const domCache = new Map<string, Promise<Map<number, DomInfo>>>();
+  const domFor = (sid: string) => { let d = domCache.get(sid); if (!d) { d = domInfo(cdp, sid).catch(() => new Map()); domCache.set(sid, d); } return d; };
+  const load = async (sid: string, frameId: string | undefined, owner?: El): Promise<Doc> => {
+    const [{ nodes }, dom] = await Promise.all([
+      cdp.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree", frameId ? { frameId } : {}, sid),
+      domFor(sid),
+    ]);
+    return { sid, owner, nodes, byId: new Map(nodes.map((n) => [n.nodeId, n])), dom };
+  };
+  const frames = new Map<string, Doc>();
+  const children = async (sid: string, node: any, parentOwner: El | undefined, depth: number): Promise<void> => {
+    if (depth > 4) return;
+    await Promise.all((node.childFrames ?? []).map(async (child: any) => {
+      try {
+        const { backendNodeId } = await cdp.send<{ backendNodeId: number }>("DOM.getFrameOwner", { frameId: child.frame.id }, sid);
+        const owner: El = { sid, bid: backendNodeId, owner: parentOwner };
+        const oop = oopifs.get(child.frame.id);
+        if (oop) {
+          frames.set(elKey(owner), await load(oop, undefined, owner));
+          const { frameTree } = await cdp.send<any>("Page.getFrameTree", {}, oop);
+          await children(oop, frameTree, owner, depth + 1);
+        } else {
+          frames.set(elKey(owner), await load(sid, child.frame.id, owner));
+          await children(sid, child, owner, depth + 1);
+        }
+      } catch { /* frame detached mid-snapshot */ }
+    }));
+  };
+  const [main, { frameTree }] = await Promise.all([load(mainSid, undefined), cdp.send<any>("Page.getFrameTree", {}, mainSid)]);
+  await children(mainSid, frameTree, undefined, 0);
+  // Out-of-process frames are missing from their parent's frame tree: find each one's <iframe> host in an already-loaded session.
+  const docs = () => [main, ...frames.values()];
+  const loaded = new Set([...frames.values()].map((d) => d.sid));
+  for (let pass = 0; pass < 4; pass++) {
+    let progress = false;
+    for (const [frameId, oop] of oopifs) {
+      if (loaded.has(oop)) continue;
+      for (const sid of new Set(docs().map((d) => d.sid))) {
+        const r = await cdp.send<{ backendNodeId: number }>("DOM.getFrameOwner", { frameId }, sid).catch(() => null);
+        if (!r?.backendNodeId) continue;
+        const host = docs().find((d) => d.sid === sid && d.nodes.some((n) => n.backendDOMNodeId === r.backendNodeId));
+        const owner: El = { sid, bid: r.backendNodeId, owner: host?.owner };
+        try {
+          frames.set(elKey(owner), await load(oop, undefined, owner));
+          const { frameTree: ft } = await cdp.send<any>("Page.getFrameTree", {}, oop);
+          await children(oop, ft, owner, 1);
+        } catch { /* gone */ }
+        loaded.add(oop); progress = true;
+        break;
+      }
+    }
+    if (!progress) break;
+  }
+  return { main, frames };
+}
+
+export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, opts: SnapshotOptions = {}, oopifs = new Map<string, string>()): Promise<{ text: string; refCount: number; lines: number }> {
   const maxText = opts.maxText ?? 80;
-  const [{ nodes }, dom] = await Promise.all([
-    cdp.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree", {}, sessionId),
-    domInfo(cdp, sessionId).catch(() => new Map<number, DomInfo>()),
-  ]);
-  const byId = new Map(nodes.map((n) => [n.nodeId, n]));
-  const root = nodes.find((n) => !n.parentId) ?? nodes[0];
+  const { main, frames } = await loadDocs(cdp, sessionId, oopifs);
+  // Current document while walking; swapped when descending into an iframe.
+  let { byId, dom, sid: curSid, owner: curOwner } = main;
+  const root = main.nodes.find((n) => !n.parentId) ?? main.nodes[0];
   const lines: string[] = [];
   let refCount = 0;
 
   const refFor = (backendNodeId: number, role: string, name: string) => {
-    let r = refs.byBackend.get(backendNodeId);
-    if (!r) { r = refs.next++; refs.byBackend.set(backendNodeId, r); }
-    refs.byRef.set(r, { backendNodeId, role, name });
+    const el: El = { sid: curSid, bid: backendNodeId, owner: curOwner };
+    const key = elKey(el);
+    let r = refs.byBackend.get(key);
+    if (!r) { r = refs.next++; refs.byBackend.set(key, r); }
+    refs.byRef.set(r, { el, role, name });
     refCount++;
     return r;
   };
@@ -157,6 +224,18 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
     const kids = (ip = inPointer) => { for (const c of n.childIds ?? []) walk(byId.get(c), depth, passName, ip); };
     const kidsDeeper = (ip = inPointer) => { for (const c of n.childIds ?? []) walk(byId.get(c), depth + 1, passName, ip); };
 
+    const sub = (role === "Iframe" || role === "IframePresentational") && n.backendDOMNodeId ? frames.get(`${curSid}:${n.backendDOMNodeId}`) : undefined;
+    if (sub) {
+      if (info && !info.visible && dom.size) return;
+      const subRoot = sub.nodes.find((x) => !x.parentId) ?? sub.nodes[0];
+      const title = name || norm(subRoot?.name?.value);
+      lines.push(`${"  ".repeat(Math.min(depth, 12))}- iframe${title ? ` "${clip(title, maxText)}"` : ""}`);
+      const saved = { byId, dom, curSid, curOwner };
+      ({ byId, dom } = sub); curSid = sub.sid; curOwner = sub.owner;
+      walk(subRoot, depth + 1, "", false);
+      ({ byId, dom, curSid, curOwner } = saved);
+      return;
+    }
     if (n.ignored || SKIP_ROLES.has(role)) return kids();
     if (info && !info.visible && dom.size && role !== "RootWebArea") {
       // Hidden subtree: AX may still list it (e.g. visibility toggles). Skip unless a child is visible.

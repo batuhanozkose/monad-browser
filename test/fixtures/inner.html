@@ -1,0 +1,4 @@
+<!doctype html><html><head><title>Inner</title></head><body>
+<label>Inner name <input id="q"></label>
+<button onclick="this.textContent = 'clicked ' + new URLSearchParams(location.search).get('n') + ' ' + document.getElementById('q').value">Go</button>
+</body></html>

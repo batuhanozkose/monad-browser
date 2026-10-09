@@ -78,3 +78,24 @@ test("mcp server lists tools and calls them", { skip }, () => {
   assert.ok(out[1].result.tools.some((t) => t.name === "browser_run"));
   assert.match(out[2].result.content[0].text, /\[textbox Name\]@3/);
 });
+
+test("iframes (same-origin and out-of-process) are in the snapshot and clickable", { skip }, async () => {
+  const { spawn } = await import("node:child_process");
+  // Separate process: execFileSync blocks this event loop, so an in-process server could not answer.
+  const srv = spawn(process.execPath, ["-e", `require("http").createServer((q,r)=>{try{r.end(require("fs").readFileSync(${JSON.stringify(join(here, "fixtures"))}+q.url.split("?")[0]))}catch{r.writeHead(404);r.end()}}).listen(18091,()=>console.log("up"))`]);
+  await new Promise((r) => srv.stdout.once("data", r));
+  try {
+    mb("open", "http://127.0.0.1:18091/frames.html");
+    mb("wait", "500");
+    const s = mb("snapshot");
+    assert.match(s, /iframe "Same origin frame"\n\s+- \[textbox Inner name\]@(\d+) \[button Go\]@(\d+)/);
+    assert.match(s, /iframe "Cross origin frame"\n\s+- \[textbox Inner name\]@(\d+) \[button Go\]@(\d+)/);
+    const refs = [...s.matchAll(/\[textbox Inner name\]@(\d+) \[button Go\]@(\d+)/g)];
+    mb("fill", `@${refs[1][1]}`, "x");
+    mb("click", `@${refs[1][2]}`);
+    mb("click", `@${refs[0][2]}`);
+    const after = mb("snapshot");
+    assert.match(after, /\[button clicked same\]@/);
+    assert.match(after, /\[button clicked cross x\]@/);
+  } finally { srv.kill(); mb("open", `${F}/form.html`); }
+});

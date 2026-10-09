@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>Frames</title></head><body style="margin:0">
+<h1>Outer page</h1>
+<div style="height:300px"></div>
+<iframe id="same" title="Same origin frame" src="inner.html?n=same" style="width:400px;height:200px;margin-left:50px;border:7px solid #ccc"></iframe>
+<iframe id="cross" title="Cross origin frame" src="" style="width:400px;height:200px;border:3px solid #ccc;padding:5px"></iframe>
+<script>document.getElementById('cross').src = location.protocol === 'file:' ? 'inner.html?n=cross' : location.href.replace('127.0.0.1', 'localhost').replace('frames.html', 'inner.html?n=cross');</script>
+</body></html>
