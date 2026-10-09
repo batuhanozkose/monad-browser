@@ -1,0 +1,16 @@
+{
+  "name": "monad-browser",
+  "version": "0.1.0-alpha.0",
+  "description": "Headless, turnkey browser CLI for AI agents: compact AX snapshots with @refs, warm daemon, raw CDP. No Playwright.",
+  "type": "module",
+  "bin": { "monad-browser": "./dist/cli.js", "mb": "./dist/cli.js" },
+  "files": ["dist", "README.md", "LICENSE", "NOTICE"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/"
+  },
+  "license": "MIT",
+  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29" }
+}

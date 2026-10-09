@@ -1,0 +1,13 @@
+<!doctype html><html><head><title>Fixture Form</title></head><body>
+<nav><a href="form.html">Home</a> <a href="next.html">Next page</a></nav>
+<h1>Sign up</h1>
+<form onsubmit="event.preventDefault(); document.getElementById('out').textContent='Hello '+document.getElementById('name').value+' / '+document.getElementById('plan').value+' / '+document.getElementById('agree').checked;">
+  <label>Name <input id="name" placeholder="Your name"></label>
+  <label>Plan <select id="plan"><option value="free">Free</option><option value="pro">Pro</option></select></label>
+  <label><input type="checkbox" id="agree"> I agree</label>
+  <button type="submit">Submit</button>
+</form>
+<div class="card" style="cursor:pointer" onclick="this.textContent='card clicked'"><span>Open</span> <b>card</b></div>
+<div style="display:none"><button>Hidden button</button></div>
+<p id="out"></p>
+</body></html>
