@@ -47,3 +47,34 @@ test("navigation via click settles quickly", { skip }, () => {
   assert.ok(Date.now() - t < 3000);
   assert.match(mb("url"), /^Next/);
 });
+
+test("diff snapshot returns only changes", { skip }, () => {
+  mb("open", `${F}/form.html`);
+  mb("snapshot");
+  const d = mb("fill", "@3", "Diff", "-s");
+  assert.match(d, /\+ +- \[textbox Name="Diff"\]@3/);
+  assert.doesNotMatch(d, /Next page/);
+  assert.match(mb("snapshot", "-d"), /no changes/);
+});
+
+test("state save/load round-trips cookies", { skip }, async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const f = join(mkdtempSync(join(tmpdir(), "mb-")), "st.json");
+  mb("cdp", "Network.setCookie", JSON.stringify({ name: "tok", value: "abc", url: "https://example.com/" }));
+  assert.match(mb("state", "save", f), /saved [1-9]/);
+  mb("cdp", "Network.clearBrowserCookies");
+  mb("state", "load", f);
+  assert.match(mb("cdp", "Network.getCookies", JSON.stringify({ urls: ["https://example.com/"] })), /"tok"/);
+});
+
+test("mcp server lists tools and calls them", { skip }, () => {
+  const input = [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/list" },
+    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_open", arguments: { url: `${F}/form.html` } } },
+  ].map((m) => JSON.stringify(m)).join("\n") + "\n";
+  const out = execFileSync(process.execPath, [cli, "mcp"], { env, input, encoding: "utf8" }).trim().split("\n").map((l) => JSON.parse(l));
+  assert.ok(out[1].result.tools.some((t) => t.name === "browser_run"));
+  assert.match(out[2].result.content[0].text, /\[textbox Name\]@3/);
+});

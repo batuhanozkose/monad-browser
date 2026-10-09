@@ -24,7 +24,7 @@ export function parseArgs(argv: string[]): { args: string[]; flags: Flags } {
   }
   return { args, flags };
 }
-const BOOL_FLAGS = new Set(["full", "interactive", "json", "no-snapshot", "snapshot", "headful", "diff"]);
+const BOOL_FLAGS = new Set(["full", "interactive", "json", "no-snapshot", "snapshot", "headful", "diff", "submit"]);
 const SHORT: Record<string, string> = { i: "interactive", f: "full", s: "snapshot", d: "diff" };
 
 const need = (args: string[], n: number, usage: string) => { if (args.length < n) throw new Error(`usage: ${usage}`); };
@@ -69,10 +69,11 @@ export const COMMANDS: Record<string, Cmd> = {
     },
   },
   fill: {
-    usage: "fill <@ref|selector> <text> [-s]   clear and type into an input",
+    usage: "fill <@ref|selector> <text> [--submit] [-s]   clear and type into an input (--submit presses Enter)",
     async run(ctx, args, flags) {
       need(args, 2, this.usage);
       await ctx.browser.fill(args[0], args.slice(1).join(" "));
+      if (flags.submit) await ctx.browser.press("Enter");
       return maybeSnap(ctx, flags, `ok filled ${args[0]}`);
     },
   },
@@ -199,7 +200,9 @@ export function helpText() {
   const seen = new Set<Cmd>();
   const lines = ["monad-browser — headless browser for agents", "", "usage: mb [--session NAME] <command> [args]", "", "commands:"];
   for (const c of Object.values(COMMANDS)) { if (seen.has(c)) continue; seen.add(c); lines.push(`  ${c.usage}`); }
-  lines.push("  start [--cdp URL|PORT] [--headful] [--profile DIR] [--block image,font]   start daemon explicitly", "  stop [--all] | status | sessions   (each --session NAME is its own browser; --profile DIR persists it)");
+  lines.push("  start [--cdp URL|PORT] [--headful] [--profile DIR] [--block image,font]   start daemon explicitly", "  mcp   run as an MCP server over stdio (same warm browser as the CLI)",
+    "  install-skill [--project | --dir DIR | --print]   install SKILL.md for coding agents",
+    "  stop [--all] | status | sessions   (each --session NAME is its own browser; --profile DIR persists it)");
   lines.push("", "refs: snapshot assigns @N to interactive elements; refs stay stable while the element lives.");
   return lines.join("\n");
 }

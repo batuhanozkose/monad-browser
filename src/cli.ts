@@ -1,40 +1,9 @@
 #!/usr/bin/env node
 // Thin client: forwards argv to the session daemon, starting it on first use.
-import { connect } from "node:net";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { existsSync, openSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { socketPath, stateDir, runDaemon, type Response } from "./daemon.js";
+import { existsSync, readdirSync } from "node:fs";
+import { socketPath, stateDir, runDaemon } from "./daemon.js";
+import { request, startDaemon } from "./client.js";
 import { helpText, parseArgs } from "./commands.js";
-
-function request(session: string, argv: string[], timeoutMs = 120_000): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const sock = connect(socketPath(session));
-    let buf = "";
-    const timer = setTimeout(() => { sock.destroy(); reject(new Error(`timeout after ${timeoutMs}ms`)); }, timeoutMs);
-    sock.on("connect", () => sock.write(JSON.stringify({ argv, cwd: process.cwd() }) + "\n"));
-    sock.on("data", (d) => (buf += d.toString()));
-    sock.on("end", () => { clearTimeout(timer); try { resolve(JSON.parse(buf)); } catch { reject(new Error("bad daemon response")); } });
-    sock.on("error", (e) => { clearTimeout(timer); reject(e); });
-  });
-}
-
-async function startDaemon(session: string, launchArgv: string[]) {
-  mkdirSync(stateDir(), { recursive: true });
-  const log = openSync(join(stateDir(), `${session}.log`), "a");
-  const self = fileURLToPath(import.meta.url);
-  const child = spawn(process.execPath, [self, "__daemon", session, ...launchArgv], {
-    detached: true, stdio: ["ignore", log, log, "ipc"], env: process.env,
-  });
-  await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`daemon did not start in 30s — see ${join(stateDir(), session + ".log")}`)), 30_000);
-    child.once("message", () => { clearTimeout(t); resolve(); });
-    child.once("exit", (code) => { clearTimeout(t); reject(new Error(`daemon exited (${code}) — see ${join(stateDir(), session + ".log")}`)); });
-  });
-  child.disconnect();
-  child.unref();
-}
 
 const LAUNCH_FLAGS = ["cdp", "headful", "profile", "block", "chrome", "idle", "proxy"];
 
@@ -92,6 +61,8 @@ async function main() {
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { console.log(helpText()); return; }
   if (cmd === "--version" || cmd === "version") { console.log("monad-browser 0.1.0-alpha.0"); return; }
 
+  if (cmd === "mcp") { const { runMcp } = await import("./mcp.js"); await runMcp(session, launch); return; }
+  if (cmd === "install-skill") { const { installSkill } = await import("./skill.js"); console.log(installSkill(argv.slice(1))); return; }
   if (cmd === "sessions") { console.log(await listSessions()); return; }
   if (cmd === "stop" && argv[1] === "--all") {
     for (const s of await liveSessions()) { await request(s, ["stop"], 5000).catch(() => {}); console.log(`ok stopped ${s}`); }

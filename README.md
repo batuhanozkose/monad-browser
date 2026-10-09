@@ -21,6 +21,15 @@ mb stop
 - **Targets**: `@N`, `text=Label`, `role=button:Submit`, or CSS.
 - **Inline snapshot**: rows, list items and paragraphs collapse to one line with inline refs
   (`- row: 675 points by [ilreb]@14 [4 hours ago]@15 | [hide]@16`), about half the size of a tree dump.
+- **Diff snapshots**: `mb click @12 -s` prints only what changed (`+`/`-` lines under their parent), and
+  `mb snapshot -d` does the same on demand. Stable refs make the diff exact.
+- **Sessions & logins**: `--session NAME` gives each agent its own browser; `mb sessions`, `mb stop --all`.
+  `mb state save auth.json` / `mb state load auth.json` carry cookies + storage between sessions.
+- **MCP mode**: `mb mcp` serves 10 lean tools over stdio (`browser_run`, `browser_open`, `browser_click`,
+  `browser_fill`, …), sharing the same warm browser as the CLI. Claude Code:
+  `claude mcp add monad-browser -- npx monad-browser mcp`
+- **Agent skill**: `mb install-skill` writes SKILL.md to `~/.claude/skills` and `~/.agents/skills`
+  (`--project` for the repo, `--dir` anywhere, `--print` to stdout).
 - **Warm daemon**: first command launches Chrome and a per-session daemon (unix socket); later commands take ~40 ms.
 - **Snapshot**: Accessibility tree merged with DOMSnapshot layout. Hidden nodes are dropped; `cursor:pointer`
   elements without an ARIA role show up as `clickable`. Refs stay stable for an element's lifetime.
@@ -31,4 +40,4 @@ mb stop
 
 Env: `MONAD_CHROME` (browser path), `MONAD_NO_SANDBOX=1`, `MONAD_IDLE_MINUTES` (default 30), `MONAD_HOME`.
 
-Status: alpha. Done: daemon, CDP core, snapshot, commands, `run`, auto-wait. Next: diff snapshots, sessions, MCP mode, benchmark.
+Status: alpha. Done: daemon, CDP core, snapshot, `run`, auto-wait, diff snapshots, sessions/state, MCP, skill. Next: benchmark, Docker/E2B.
