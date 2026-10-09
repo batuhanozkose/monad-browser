@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { readFileSync } from "node:fs";
 import type { Browser } from "./browser.js";
+import { DEFAULT_MAX_LINES } from "./snapshot.js";
 import { runScript, RUN_HELP } from "./run.js";
 
 export type Ctx = { browser: Browser; cwd: string };
@@ -56,7 +57,7 @@ export const COMMANDS: Record<string, Cmd> = {
   snapshot: {
     usage: "snapshot [-i] [-d] [--max-lines N] [--max-text N]   accessibility snapshot with @refs (-i: interactive only, -d: only what changed)",
     async run(ctx, _a, flags) {
-      return ctx.browser.snapshot({ interactive: !!flags.interactive, diff: !!flags.diff, maxLines: num(flags["max-lines"], 400), maxText: num(flags["max-text"], 80) });
+      return ctx.browser.snapshot({ interactive: !!flags.interactive, diff: !!flags.diff, maxLines: num(flags["max-lines"], DEFAULT_MAX_LINES), maxText: num(flags["max-text"], 80) });
     },
   },
   click: {

@@ -3,14 +3,32 @@
   "version": "0.1.0-alpha.0",
   "description": "Headless, turnkey browser CLI for AI agents: compact AX snapshots with @refs, warm daemon, raw CDP. No Playwright.",
   "type": "module",
-  "bin": { "monad-browser": "./dist/cli.js", "mb": "./dist/cli.js" },
-  "files": ["dist", "README.md", "LICENSE", "NOTICE"],
-  "engines": { "node": ">=22" },
+  "bin": {
+    "monad-browser": "./dist/cli.js",
+    "mb": "./bin/mb"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "scripts/postinstall.mjs",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --test test/*.test.mjs",
+    "build:native": "cd native && for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -ldflags='-s -w' -o ../bin/native/mb-${t%/*}-${t#*/} . || exit 1; done",
+    "postinstall": "node scripts/postinstall.mjs",
+    "prepack": "npm run build && npm run build:native"
   },
   "license": "MIT",
-  "devDependencies": { "typescript": "^5.8.3", "@types/node": "^22.15.29" }
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "@types/node": "^22.15.29"
+  }
 }

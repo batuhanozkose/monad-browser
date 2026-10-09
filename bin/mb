@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fallback launcher. `npm install` normally replaces this file with the native client
+# (scripts/postinstall.mjs); if it did not, use the native binary when present, else Node.
+d=$(cd "$(dirname "$0")" && pwd -P)
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) b=mb-linux-amd64 ;; Linux-aarch64|Linux-arm64) b=mb-linux-arm64 ;;
+  Darwin-x86_64) b=mb-darwin-amd64 ;; Darwin-arm64) b=mb-darwin-arm64 ;; *) b= ;;
+esac
+[ -n "$b" ] && [ -x "$d/native/$b" ] && exec "$d/native/$b" "$@"
+exec node "$d/../dist/cli.js" "$@"

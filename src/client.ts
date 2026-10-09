@@ -3,7 +3,7 @@ import { connect } from "node:net";
 import { spawn } from "node:child_process";
 import { existsSync, openSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { socketPath, stateDir, type Response } from "./daemon.js";
+import { socketPath, stateDir, type Response } from "./paths.js";
 
 const cliPath = () => new URL("./cli.js", import.meta.url).pathname;
 
@@ -38,7 +38,11 @@ export async function startDaemon(session: string, launchArgv: string[]) {
 
 /** Send argv to the session daemon, starting it first if needed. */
 export async function call(session: string, argv: string[], launch: string[] = [], timeoutMs = 120_000): Promise<Response> {
-  const up = existsSync(socketPath(session)) && (await request(session, ["status"], 3000).then(() => true, () => false));
-  if (!up) await startDaemon(session, launch);
+  // Optimistic: one round trip when the daemon is up; start it only if nobody is listening.
+  try { return await request(session, argv, timeoutMs); }
+  catch (e) { if (!notListening(e)) throw e; }
+  await startDaemon(session, launch);
   return request(session, argv, timeoutMs);
 }
+
+export const notListening = (e: any) => ["ENOENT", "ECONNREFUSED", "ENOTSOCK"].includes(e?.code);

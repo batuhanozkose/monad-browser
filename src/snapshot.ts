@@ -31,6 +31,8 @@ type AXNode = {
 
 type DomInfo = { visible: boolean; pointer: boolean; tag?: string; href?: string };
 
+/** High enough that real pages (Wikipedia ~660 lines, MDN ~1060) are never cut; only runaway pages are. */
+export const DEFAULT_MAX_LINES = 2000;
 export type SnapshotOptions = { interactive?: boolean; maxText?: number; maxLines?: number; compact?: boolean; maxInline?: number; maxProse?: number };
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -305,7 +307,7 @@ export async function takeSnapshot(cdp: CDP, sessionId: string, refs: RefTable, 
 
   walk(root, 0, "");
   mergeLinkRuns(lines, INLINE_MAX);
-  const maxLines = opts.maxLines ?? 400;
+  const maxLines = opts.maxLines ?? DEFAULT_MAX_LINES;
   let text = lines.join("\n");
   if (lines.length > maxLines) text = lines.slice(0, maxLines).join("\n") + `\n… ${lines.length - maxLines} more lines (use --max-lines or -i)`;
   return { text, refCount, lines: lines.length };

@@ -6,12 +6,10 @@ import { join } from "node:path";
 import { Browser, type BrowserOptions } from "./browser.js";
 import { dispatch } from "./commands.js";
 
-export const stateDir = () => process.env.MONAD_HOME || join(homedir(), ".monad-browser");
-export const socketPath = (session: string) =>
-  process.platform === "win32" ? `\\\\.\\pipe\\monad-browser-${session}` : join(stateDir(), `${session}.sock`);
+import { stateDir, socketPath, type Request, type Response } from "./paths.js";
+export { stateDir, socketPath };
+export type { Request, Response } from "./paths.js";
 
-export type Request = { argv: string[]; cwd: string };
-export type Response = { ok: boolean; out?: string; error?: string; ms?: number };
 
 export async function runDaemon(session: string, opts: BrowserOptions & { idleMinutes?: number }) {
   mkdirSync(stateDir(), { recursive: true });

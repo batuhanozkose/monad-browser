@@ -97,7 +97,8 @@ export class Browser {
     on("Page.frameNavigated", (p) => { if (!p.frame.parentId) { tab.url = p.frame.url; tab.mainFrame = p.frame.id; } });
     on("Page.frameRequestedNavigation", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
     on("Page.frameStartedLoading", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
-    on("Page.lifecycleEvent", (p) => { if (p.name === "load" && (!tab.mainFrame || p.frameId === tab.mainFrame)) tab.loadAt = Date.now(); });
+    // Ready = DOM parsed (DOMContentLoaded) plus a quiet window for scripts/XHR; images and fonts are not waited for.
+    on("Page.lifecycleEvent", (p) => { if (p.name === "DOMContentLoaded" && (!tab.mainFrame || p.frameId === tab.mainFrame)) tab.loadAt = Date.now(); });
     on("Page.navigatedWithinDocument", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.url = p.url; });
     on("Page.javascriptDialogOpening", async (p) => {
       this.dialogs.push(`${p.type}: ${p.message}`);
@@ -193,7 +194,7 @@ export class Browser {
     const res = await this.send("Page.navigate", { url });
     if (res.errorText) throw new Error(`navigation failed: ${res.errorText} (${url})`);
     const end = since + timeoutMs;
-    while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(20);
+    while (res.loaderId && tab.loadAt < since && Date.now() < end) await sleep(10);
     await this.networkIdle(50, 4000);
     tab.refs = newRefTable();
     return this.info();
@@ -388,41 +389,46 @@ export class Browser {
   async actionable(target: string, opts: { timeoutMs?: number; enabled?: boolean; hitTest?: boolean } = {}): Promise<{ id: El; x: number; y: number }> {
     const end = Date.now() + (opts.timeoutMs ?? this.actionTimeout);
     let reason = "not found";
-    let last: { x: number; y: number } | null = null;
     let scrolled = false;
     while (true) {
       try {
         const id = await this.resolve(target);
         if (!scrolled) { await this.scrollIntoView(id); scrolled = true; }
-        const c = await this.quadCenter(id);
-        if (!c) { reason = "not visible"; scrolled = false; }
-        else if (!last || Math.abs(last.x - c.x) > 0.5 || Math.abs(last.y - c.y) > 0.5) { reason = "still moving"; last = c; await sleep(16); continue; }
-        else {
-          // Hit-test in the element's own document: page point minus its frame's viewport origin.
+        // One round trip does every check in the element's own document and returns the point to act on
+        // (viewport coordinates of that document). Stability: only elements with running animations wait a frame.
+        const r = await this.callOn(id, `async function(hit, needEnabled){
+          const el = this;
+          if (!el.isConnected) return { s: 'detached' };
+          const run = (el.ownerDocument.getAnimations?.() ?? []).filter(a => a.playState === 'running' && a.effect?.target && (a.effect.target === el || a.effect.target.contains?.(el)));
+          if (run.length) await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+          let best = null, area = 0;
+          for (const q of el.getClientRects()) { const a = q.width * q.height; if (a > area) { area = a; best = q; } }
+          if (!best || area < 1) return { s: 'not visible' };
+          const x = best.left + best.width / 2, y = best.top + best.height / 2;
+          if (needEnabled && (el.disabled || el.closest('[aria-disabled="true"],fieldset[disabled]'))) return { s: 'disabled' };
+          const st = getComputedStyle(el);
+          if (st.visibility === 'hidden' || st.pointerEvents === 'none') return { s: 'not interactable (' + (st.visibility === 'hidden' ? 'hidden' : 'pointer-events:none') + ')' };
+          if (run.length) return { s: 'still moving', x, y };
+          if (!hit) return { s: 'ok', x, y };
+          let e = el.ownerDocument.elementFromPoint(x, y);
+          while (e && e.shadowRoot) { const inner = e.shadowRoot.elementFromPoint(x, y); if (!inner || inner === e) break; e = inner; }
+          if (!e || el === e || el.contains(e) || e.contains(el)) return { s: 'ok', x, y };
+          if (el.labels && [...el.labels].some(l => l === e || l.contains(e))) return { s: 'ok', x, y };
+          const d = e.closest('[role],button,a,input,dialog') || e;
+          return { s: 'covered by ' + d.tagName.toLowerCase() + (d.id ? '#' + d.id : '') + (d.className && typeof d.className === 'string' ? '.' + d.className.trim().split(/\\s+/)[0] : '') + ' "' + (d.innerText || '').trim().slice(0, 40) + '"' };
+        }`, [opts.hitTest !== false, opts.enabled !== false]);
+        if (r?.s === "ok") {
           const org = id.owner ? await this.contentOrigin(id.owner) : { x: 0, y: 0 };
-          const state = await this.callOn(id, `function(x, y, hit, needEnabled){
-            const el = this;
-            if (needEnabled && (el.disabled || el.closest('[aria-disabled="true"],fieldset[disabled]'))) return 'disabled';
-            const st = getComputedStyle(el);
-            if (st.visibility === 'hidden' || st.pointerEvents === 'none') return 'not interactable (' + (st.visibility === 'hidden' ? 'hidden' : 'pointer-events:none') + ')';
-            if (!hit) return 'ok';
-            let e = document.elementFromPoint(x, y);
-            while (e && e.shadowRoot) { const inner = e.shadowRoot.elementFromPoint(x, y); if (!inner || inner === e) break; e = inner; }
-            if (!e || el === e || el.contains(e) || e.contains(el)) return 'ok';
-            const lab = el.labels && [...el.labels].some(l => l === e || l.contains(e));
-            if (lab) return 'ok';
-            const d = e.closest('[role],button,a,input,dialog') || e;
-            return 'covered by ' + d.tagName.toLowerCase() + (d.id ? '#' + d.id : '') + (d.className && typeof d.className === 'string' ? '.' + d.className.trim().split(/\\s+/)[0] : '') + ' "' + (d.innerText || '').trim().slice(0, 40) + '"';
-          }`, [c.x - org.x, c.y - org.y, opts.hitTest !== false, opts.enabled !== false]);
-          if (state === "ok") return { id, ...c };
-          reason = state;
+          return { id, x: r.x + org.x, y: r.y + org.y };
         }
+        reason = r?.s ?? "not found";
+        if (reason === "not visible" || reason === "detached") scrolled = false;
       } catch (e: any) {
         reason = e?.message ?? String(e);
         if (/is gone from the page|unknown ref/.test(reason)) throw e;
       }
       if (Date.now() > end) throw new Error(`${target}: ${reason} (waited ${opts.timeoutMs ?? this.actionTimeout} ms)`);
-      await sleep(100);
+      await sleep(reason === "still moving" ? 0 : 50);
     }
   }
 
@@ -444,9 +450,12 @@ export class Browser {
     const tab = this.tab();
     await sleep(15);
     if (tab.navAt >= since) {
+      // Navigation: same contract as goto — the load event, then a short quiet window for late XHR.
       const end = Date.now() + 15_000;
-      while (tab.loadAt < tab.navAt && Date.now() < end) await sleep(25);
+      while (tab.loadAt < tab.navAt && Date.now() < end) await sleep(10);
       tab.refs = newRefTable();
+      await this.networkIdle(50, 3000);
+      return;
     }
     await this.networkIdle(150, 3000, since);
   }
