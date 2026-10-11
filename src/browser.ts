@@ -11,6 +11,9 @@ export type BrowserOptions = {
   proxy?: string;
 };
 
+/** A searchable document: a session, plus a frameId for same-process child frames, plus its <iframe> owner chain. */
+type DocRef = { sid: string; frameId?: string; owner?: El };
+
 type Tab = {
   targetId: string; sessionId: string; refs: RefTable; inflight: Map<string, number>; lastNet: number; url: string; title: string;
   mainFrame?: string; navAt: number; loadAt: number; fullLoadAt: number;
@@ -23,6 +26,8 @@ const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", m
 
 const STALE_MS = 2000;
 const DOM_TYPES = new Set(["Document", "Script", "XHR", "Fetch", "Stylesheet"]);
+
+const normText = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
 
 /** Blank out string literals and comments so keyword probes don't fire inside them. */
 const stripLiterals = (s: string) => s
@@ -322,22 +327,96 @@ export class Browser {
       }
       throw new Error(`@${n} (${ref.role} "${ref.name}") is gone from the page — take a fresh snapshot`);
     }
+    // Name/role/CSS targets search the top document first (the common case, no frame discovery),
+    // then every same-process and out-of-process frame.
+    const topDoc: DocRef = { sid: tab.sessionId };
     if (t.startsWith("text=")) {
-      const ids = await this.queryAX(t.slice(5));
-      if (!ids.length) throw new Error(`no element named "${t.slice(5)}"`);
-      return top(ids[0]);
+      const name = t.slice(5);
+      const hit = await this.findInFrames(name, undefined, topDoc);
+      if (!hit) throw new Error(`no element named "${name}"`);
+      return hit;
     }
     const rm = /^role=([\w-]+)(?::(.+))?$/.exec(t);
     if (rm) {
-      const ids = await this.queryAX(rm[2], rm[1]);
-      if (!ids.length) throw new Error(`no ${rm[1]}${rm[2] ? ` named "${rm[2]}"` : ""}`);
-      return top(ids[0]);
+      const hit = await this.findInFrames(rm[2], rm[1], topDoc);
+      if (!hit) throw new Error(`no ${rm[1]}${rm[2] ? ` named "${rm[2]}"` : ""}`);
+      return hit;
     }
-    const { root } = await this.send("DOM.getDocument", { depth: 0 });
-    const { nodeId } = await this.send("DOM.querySelector", { nodeId: root.nodeId, selector: t });
-    if (!nodeId) throw new Error(`no element matches selector: ${t}`);
-    const { node } = await this.send("DOM.describeNode", { nodeId });
-    return top(node.backendNodeId);
+    const topBid = await this.queryCss(t, topDoc);
+    if (topBid !== undefined) return top(topBid);
+    for (const d of await this.frameDocs()) {
+      if (d.sid === tab.sessionId && d.frameId === undefined) continue; // top already tried
+      const bid = await this.queryCss(t, d);
+      if (bid !== undefined) return this.elFor(bid, d);
+    }
+    throw new Error(`no element matches selector: ${t}`);
+  }
+
+  private elFor(bid: number, d: DocRef): El { return { sid: d.sid, bid, owner: d.owner }; }
+
+  /** Query the top document, then fall back to every frame document. */
+  private async findInFrames(name: string | undefined, role: string | undefined, topDoc: DocRef): Promise<El | undefined> {
+    const topIds = await this.queryAX(name, role, topDoc);
+    if (topIds.length) return this.elFor(topIds[0], topDoc);
+    for (const d of await this.frameDocs()) {
+      if (d.sid === topDoc.sid && d.frameId === undefined) continue; // already tried
+      const ids = await this.queryAX(name, role, d);
+      if (ids.length) return this.elFor(ids[0], d);
+    }
+    return undefined;
+  }
+
+  /**
+   * Every document a target can live in: the top document, same-process child frames (a `frameId` within
+   * the tab session), and out-of-process frames (their own session). Each carries the `<iframe>` owner chain
+   * so clicks and fills inside a frame land at the right page coordinates.
+   */
+  private async frameDocs(): Promise<DocRef[]> {
+    const tab = this.tab();
+    const mainSid = tab.sessionId;
+    const docs: DocRef[] = [{ sid: mainSid }];
+    const sessionOwner = new Map<string, El | undefined>([[mainSid, undefined]]);
+    const seenFrames = new Set<string>();
+    const visit = async (sid: string, tree: any, owner: El | undefined, depth: number) => {
+      if (depth > 4) return;
+      for (const child of tree?.childFrames ?? []) {
+        const fid = child.frame.id as string;
+        if (seenFrames.has(fid)) continue;
+        seenFrames.add(fid);
+        let bid = 0;
+        try { ({ backendNodeId: bid } = await this.cdp.send<any>("DOM.getFrameOwner", { frameId: fid }, sid)); } catch { /* detached mid-resolve */ }
+        const childOwner: El = { sid, bid, owner };
+        const oopSid = tab.oopifs.get(fid);
+        if (oopSid) {
+          sessionOwner.set(oopSid, childOwner);
+          docs.push({ sid: oopSid, owner: childOwner });
+          const t = await this.cdp.send<any>("Page.getFrameTree", {}, oopSid).catch(() => null);
+          await visit(oopSid, t?.frameTree, childOwner, depth + 1);
+        } else {
+          docs.push({ sid, frameId: fid, owner: childOwner });
+          await visit(sid, child, childOwner, depth + 1);
+        }
+      }
+    };
+    const mainTree = await this.cdp.send<any>("Page.getFrameTree", {}, mainSid).catch(() => null);
+    await visit(mainSid, mainTree?.frameTree, undefined, 0);
+    // Cross-origin frames are sometimes absent from their parent's frame tree: locate the hosting <iframe>
+    // in whichever session can resolve it (same trick the snapshot uses).
+    for (const [fid, oopSid] of tab.oopifs) {
+      if (seenFrames.has(fid)) continue;
+      seenFrames.add(fid);
+      let hostSid: string | undefined;
+      let bid = 0;
+      for (const cand of [mainSid, ...sessionOwner.keys()]) {
+        try { const r = await this.cdp.send<any>("DOM.getFrameOwner", { frameId: fid }, cand); if (r?.backendNodeId) { hostSid = cand; bid = r.backendNodeId; break; } } catch { /* not in this session */ }
+      }
+      const owner: El | undefined = hostSid ? { sid: hostSid, bid, owner: sessionOwner.get(hostSid) } : undefined;
+      sessionOwner.set(oopSid, owner);
+      docs.push({ sid: oopSid, owner });
+      const t = await this.cdp.send<any>("Page.getFrameTree", {}, oopSid).catch(() => null);
+      await visit(oopSid, t?.frameTree, owner, 1);
+    }
+    return docs;
   }
 
   private async isAttached(el: El) {
@@ -350,17 +429,47 @@ export class Browser {
     } catch { return false; }
   }
 
-  /** Accessible-name (+ role) lookup over the whole document, visible nodes first. */
-  private async queryAX(name?: string, role?: string): Promise<number[]> {
-    const { root } = await this.send("DOM.getDocument", { depth: 0 });
-    const params: any = { backendNodeId: root.backendNodeId };
-    if (name) params.accessibleName = name;
-    if (role) params.role = role;
-    const { nodes } = await this.send("Accessibility.queryAXTree", params);
+  /** Accessible-name (+ role) lookup in one document, visible nodes first. */
+  private async queryAX(name?: string, role?: string, doc: DocRef = { sid: this.tab().sessionId }): Promise<number[]> {
+    let nodes: any[];
+    if (doc.frameId) {
+      // queryAXTree cannot be scoped to a frame; getFullAXTree can, so fetch and filter locally.
+      const r = await this.cdp.send<any>("Accessibility.getFullAXTree", { frameId: doc.frameId }, doc.sid);
+      const want = name === undefined ? undefined : normText(name);
+      nodes = (r.nodes ?? []).filter((n: any) =>
+        (role === undefined || (n.role?.value ?? "").toLowerCase() === role.toLowerCase()) &&
+        (want === undefined || normText(n.name?.value) === want));
+    } else {
+      const params: any = {};
+      const { root } = await this.cdp.send<any>("DOM.getDocument", { depth: 0 }, doc.sid);
+      params.backendNodeId = root.backendNodeId;
+      if (name) params.accessibleName = name;
+      if (role) params.role = role;
+      nodes = (await this.cdp.send<any>("Accessibility.queryAXTree", params, doc.sid)).nodes ?? [];
+    }
     const ids: number[] = nodes.filter((n: any) => !n.ignored && n.backendDOMNodeId).map((n: any) => n.backendDOMNodeId);
     const visible: number[] = [];
-    for (const id of ids) { try { const { quads } = await this.send("DOM.getContentQuads", { backendNodeId: id }); if (quads?.length) visible.push(id); } catch { /* hidden */ } }
+    for (const id of ids) { try { const { quads } = await this.cdp.send<any>("DOM.getContentQuads", { backendNodeId: id }, doc.sid); if (quads?.length) visible.push(id); } catch { /* hidden */ } }
     return visible.length ? visible : ids;
+  }
+
+  /** `document.querySelector` in one document, returned as a backendNodeId (same-process frames run in an isolated world). */
+  private async queryCss(selector: string, doc: DocRef): Promise<number | undefined> {
+    let contextId: number | undefined;
+    if (doc.frameId) {
+      const w = await this.cdp.send<any>("Page.createIsolatedWorld", { frameId: doc.frameId, worldName: "monad-resolve" }, doc.sid).catch(() => null);
+      contextId = w?.executionContextId;
+      if (!contextId) return undefined;
+    }
+    const r: any = await this.cdp.send<any>("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(selector)})`, contextId, returnByValue: false }, doc.sid).catch(() => null);
+    const objectId = r?.result?.objectId;
+    if (!objectId) return undefined;
+    try {
+      // describeNode takes an objectId directly and works for objects from an isolated world.
+      const { node } = await this.cdp.send<any>("DOM.describeNode", { objectId }, doc.sid);
+      return node?.backendNodeId;
+    } catch { return undefined; }
+    finally { this.cdp.send("Runtime.releaseObject", { objectId }, doc.sid).catch(() => {}); }
   }
 
   private async objectId(el: El) {

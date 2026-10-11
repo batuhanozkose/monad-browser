@@ -99,3 +99,22 @@ test("iframes (same-origin and out-of-process) are in the snapshot and clickable
     assert.match(after, /\[button clicked cross x\]@/);
   } finally { srv.kill(); mb("open", `${F}/form.html`); }
 });
+
+test("text=, role= and CSS targets resolve inside frames", { skip }, async () => {
+  const { spawn } = await import("node:child_process");
+  const srv = spawn(process.execPath, ["-e", `require("http").createServer((q,r)=>{try{r.end(require("fs").readFileSync(${JSON.stringify(join(here, "fixtures"))}+q.url.split("?")[0]))}catch{r.writeHead(404);r.end()}}).listen(18092,()=>console.log("up"))`]);
+  await new Promise((r) => srv.stdout.once("data", r));
+  try {
+    mb("open", "http://127.0.0.1:18092/frames.html");
+    mb("wait", "500");
+    // CSS and role= reach the same-process frame (first in tree order).
+    mb("fill", "#q", "css");
+    mb("click", "role=button:Go");
+    assert.match(mb("snapshot"), /\[button clicked same css\]@/);
+    // Drop the same-origin frame, so the only remaining match is the cross-origin (out-of-process) one.
+    mb("eval", "document.getElementById('same').remove(); return 1");
+    mb("fill", "text=Inner name", "oop");
+    mb("click", "text=Go");
+    assert.match(mb("snapshot"), /\[button clicked cross oop\]@/);
+  } finally { srv.kill(); mb("open", `${F}/form.html`); }
+});

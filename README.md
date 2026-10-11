@@ -343,8 +343,9 @@ A page opened and captured with `mb open` + `mb screenshot`:
 
 ## Limitations
 
-- **Selectors are top-document only.** `text=`, `role=` and CSS resolve in the main document. To act
-  inside an iframe, take a snapshot and use the `@N` refs it prints there.
+- **Selectors search the top document, then frames.** `text=`, `role=` and CSS resolve in the main
+  document first, then in same-process and out-of-process iframes (a top-document match wins an
+  ambiguous one). `@N` refs remain the fastest and most precise target.
 - **`run` scripts are trusted, not sandboxed.** See the note above.
 - **Snapshot cost scales with page size.** The accessibility tree and layout are rebuilt on every
   snapshot (Wikipedia ≈ 0.9 s). Prefer `-i` and diff snapshots on large pages.
