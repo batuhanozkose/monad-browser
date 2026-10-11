@@ -25,7 +25,7 @@ export function parseArgs(argv: string[]): { args: string[]; flags: Flags } {
   }
   return { args, flags };
 }
-const BOOL_FLAGS = new Set(["full", "interactive", "json", "no-snapshot", "snapshot", "headful", "diff", "submit"]);
+const BOOL_FLAGS = new Set(["full", "interactive", "json", "no-snapshot", "snapshot", "headful", "diff", "submit", "cache"]);
 const SHORT: Record<string, string> = { i: "interactive", f: "full", s: "snapshot", d: "diff" };
 
 const need = (args: string[], n: number, usage: string) => { if (args.length < n) throw new Error(`usage: ${usage}`); };
@@ -55,9 +55,13 @@ export const COMMANDS: Record<string, Cmd> = {
     },
   },
   snapshot: {
-    usage: "snapshot [-i] [-d] [--max-lines N] [--max-text N]   accessibility snapshot with @refs (-i: interactive only, -d: only what changed)",
+    usage: "snapshot [-i] [-d] [--max-lines N] [--max-text N] [--cache] [--cache-ms N]   accessibility snapshot with @refs (-i: interactive only, -d: only what changed, --cache: reuse a recent unchanged snapshot)",
     async run(ctx, _a, flags) {
-      return ctx.browser.snapshot({ interactive: !!flags.interactive, diff: !!flags.diff, maxLines: num(flags["max-lines"], DEFAULT_MAX_LINES), maxText: num(flags["max-text"], 80) });
+      return ctx.browser.snapshot({
+        interactive: !!flags.interactive, diff: !!flags.diff,
+        maxLines: num(flags["max-lines"], DEFAULT_MAX_LINES), maxText: num(flags["max-text"], 80),
+        cacheMs: flags.cache || flags["cache-ms"] !== undefined ? num(flags["cache-ms"], 500) : undefined,
+      });
     },
   },
   click: {

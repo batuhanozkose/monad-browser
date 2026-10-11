@@ -118,3 +118,27 @@ test("text=, role= and CSS targets resolve inside frames", { skip }, async () =>
     assert.match(mb("snapshot"), /\[button clicked cross oop\]@/);
   } finally { srv.kill(); mb("open", `${F}/form.html`); }
 });
+
+test("snapshot cache reuses an unchanged page and invalidates after a mutation", { skip }, () => {
+  mb("open", `${F}/form.html`);
+  const a = mb("snapshot", "--cache-ms", "60000");
+  const b = mb("snapshot", "--cache-ms", "60000");
+  assert.equal(b, a);
+  mb("eval", `document.querySelector("h1").textContent = "Cache busted"; return 1`);
+  assert.match(mb("snapshot", "--cache-ms", "60000"), /Cache busted/);
+  assert.doesNotMatch(mb("snapshot", "--cache-ms", "60000"), /Sign up/);
+  mb("open", `${F}/form.html`);
+});
+
+test("snapshot cache is invalidated by a reload that changes the page", { skip }, async () => {
+  const { spawn } = await import("node:child_process");
+  const srv = spawn(process.execPath, ["-e", `let n=0;require("http").createServer((q,r)=>{if(q.url!=="/"){r.writeHead(404);return r.end()}r.setHeader("content-type","text/html");r.end("<html><head><title>v</title></head><body><h1>v"+(++n)+"</h1></body></html>")}).listen(18093,()=>console.log("up"))`]);
+  await new Promise((r) => srv.stdout.once("data", r));
+  try {
+    mb("open", "http://127.0.0.1:18093/");
+    assert.match(mb("snapshot", "--cache-ms", "60000"), /v1/);
+    mb("reload");
+    // same URL, new document: the cache must not serve the old v1
+    assert.match(mb("snapshot", "--cache-ms", "60000"), /v2/);
+  } finally { srv.kill(); mb("open", `${F}/form.html`); }
+});

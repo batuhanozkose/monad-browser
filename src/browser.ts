@@ -20,6 +20,7 @@ type Tab = {
   oopifs: Map<string, string>; // out-of-process iframe frameId → its CDP session
   last?: { key: string; lines: string[] };
   storageScripts: string[]; // Page.addScriptToEvaluateOnNewDocument ids from state load, so a reload can replace them
+  cache?: { at: number; version: string; sig: string; text: string }; // last snapshot + the page version it was taken at
 };
 
 const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", media: "Media", stylesheet: "Stylesheet", css: "Stylesheet" };
@@ -28,6 +29,9 @@ const STALE_MS = 2000;
 const DOM_TYPES = new Set(["Document", "Script", "XHR", "Fetch", "Stylesheet"]);
 
 const normText = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
+
+/** 0 = disabled. Set MONAD_SNAPSHOT_CACHE_MS or pass `snapshot --cache-ms N` to reuse a recent snapshot. */
+const snapshotCacheMs = () => { const n = Number(process.env.MONAD_SNAPSHOT_CACHE_MS ?? 0); return Number.isFinite(n) && n > 0 ? n : 0; };
 
 /** Blank out string literals and comments so keyword probes don't fire inside them. */
 const stripLiterals = (s: string) => s
@@ -277,8 +281,16 @@ export class Browser {
   }
 
   /** Snapshot; with `diff`, only lines that changed since this tab's previous snapshot of the same page. */
-  async snapshot(opts: SnapshotOptions & { diff?: boolean } = {}) {
+  async snapshot(opts: SnapshotOptions & { diff?: boolean; cacheMs?: number } = {}) {
     const tab = this.tab();
+    const ttl = opts.diff ? 0 : opts.cacheMs ?? snapshotCacheMs();
+    const sig = JSON.stringify([!!opts.interactive, opts.maxText ?? null, opts.maxLines ?? null, opts.compact ?? null, opts.maxInline ?? null, opts.maxProse ?? null]);
+    // Serve the last snapshot when the page version is unchanged; the MutationObserver has already seen
+    // every prior mutation by the time this command runs, so an unchanged version means an unchanged page.
+    if (ttl > 0 && tab.cache && tab.cache.sig === sig && !this.dialogs.length && Date.now() - tab.cache.at < ttl) {
+      const version = await this.docVersion();
+      if (version !== undefined && version === tab.cache.version) return tab.cache.text;
+    }
     const res = await takeSnapshot(this.cdp, tab.sessionId, tab.refs, opts, tab.oopifs);
     const { url, title } = await this.info();
     const extra: string[] = [];
@@ -294,7 +306,28 @@ export class Browser {
       if (d.text.length < res.text.length * 0.7)
         return `${head}(diff vs last snapshot: +${d.added} -${d.removed}, ${d.same} unchanged)\n${d.text}`;
     }
-    return head + res.text;
+    const out = head + res.text;
+    if (ttl > 0) {
+      const version = await this.docVersion();
+      if (version !== undefined) tab.cache = { at: Date.now(), version, sig, text: out };
+    }
+    return out;
+  }
+
+  /** Cheap page fingerprint: the URL plus a MutationObserver counter installed once per document. */
+  private async docVersion(): Promise<string | undefined> {
+    try {
+      const v = await this.evaluate(`
+        if (!window.__monadObs) {
+          const o = { n: 0, id: Math.random().toString(36).slice(2), mo: new MutationObserver(() => { o.n++; }) };
+          o.mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+          window.__monadObs = o;
+        }
+        // id is fresh per document, so a reload of the same URL is never mistaken for the cached one.
+        return location.href + "|" + window.__monadObs.id + "|" + window.__monadObs.n;
+      `);
+      return typeof v === "string" ? v : undefined;
+    } catch { return undefined; }
   }
 
   /**
