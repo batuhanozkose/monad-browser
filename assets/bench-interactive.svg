@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 218" width="880" height="218" font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+<style>
+.fg{fill:#1f2328} .mu{fill:#59636e} .fa{fill:#8c959f}
+.gr{stroke:#d8dee4} .tr{fill:#eef1f4}
+.ot{fill:#a9b4c4} .o2{fill:#8b97a8} .hi{fill:#6366f1} .h2{fill:#22d3ee} .am{fill:#d29922} .gn{fill:#1a7f37}
+@media (prefers-color-scheme: dark){
+.fg{fill:#e6edf3} .mu{fill:#9198a1} .fa{fill:#6e7681}
+.gr{stroke:#30363d} .tr{fill:#161b22}
+.ot{fill:#4d5866} .o2{fill:#3d4756} .hi{fill:#818cf8} .h2{fill:#67e8f9} .am{fill:#e3b341} .gn{fill:#3fb950}
+}
+</style>
+<defs>
+<linearGradient id="grad" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#22d3ee"/>
+</linearGradient>
+</defs><text x="28" y="36" class="fg" font-size="20" font-weight="700">Interactive-only snapshot (-i)</text><text x="28" y="58" class="mu" font-size="13">same 6 pages, only interactive elements</text><rect x="210.0" y="84.0" width="574.0" height="34" rx="7" class="tr"/><rect x="210" y="84" width="226.9" height="34" rx="7" fill="url(#grad)"/><text x="196" y="106.0" text-anchor="end" class="fg" font-size="14" font-weight="700">monad-browser -i</text><text x="448.93023255813955" y="106.0" class="hi" font-size="14" font-weight="600">17k</text><rect x="210.0" y="134.0" width="574.0" height="34" rx="7" class="tr"/><rect x="210.0" y="134.0" width="574.0" height="34" rx="7" class="ot"/><text x="196" y="156.0" text-anchor="end" class="fg" font-size="14" font-weight="500">agent-browser -i</text><text x="796.0" y="156.0" class="mu" font-size="14" font-weight="600">43k</text><text x="210" y="208" class="fa" font-size="12">agent-browser -i keeps ~30% less page content than monad default (see retention chart).</text>
+</svg>
