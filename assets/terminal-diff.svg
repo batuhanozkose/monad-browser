@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 458 610" width="458" height="610" font-family="'SFMono-Regular', ui-monospace, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13.5">
+<rect width="458" height="610" rx="12" fill="#0b1020"/>
+<rect x="0.5" y="0.5" width="457" height="609" rx="12" fill="none" stroke="#232f4b"/>
+<path d="M0 12 A12 12 0 0 1 12 0 H446 A12 12 0 0 1 458 12 V42 H0 Z" fill="#121a2e"/>
+<line x1="0" y1="42" x2="458" y2="42" stroke="#232f4b"/>
+<circle cx="26" cy="21.0" r="6" fill="#ff5f57"/>
+<circle cx="44" cy="21.0" r="6" fill="#febc2e"/>
+<circle cx="62" cy="21.0" r="6" fill="#28c840"/>
+<text x="92" y="26.0" fill="#8b96ad" font-size="13">mb — diff snapshots</text>
+<text x="26.0" y="66" fill="#3fb950">$</text><text x="42.6" y="66" fill="#e6edf3">mb open form.html -s</text>
+<text x="26.0" y="88" fill="#3fb950">ok</text><text x="50.9" y="88" fill="#8b96ad">"Fixture Form" http://127.0.0.1:8099/form.html</text>
+<text x="26.0" y="110" fill="#a5b4fc" font-weight="600"># Fixture Form — http://127.0.0.1:8099/form.html</text>
+<text x="26.0" y="132" fill="#e6edf3">- nav: [Home]<tspan fill="#22d3ee">@1</tspan> [Next page]<tspan fill="#22d3ee">@2</tspan></text>
+<text x="26.0" y="154" fill="#e6edf3">- heading "Sign up" [level=1]</text>
+<text x="26.0" y="176" fill="#e6edf3">- form</text>
+<text x="42.6" y="198" fill="#e6edf3">- [textbox Name]<tspan fill="#22d3ee">@3</tspan></text>
+<text x="42.6" y="220" fill="#e6edf3">- combobox "Plan" <tspan fill="#22d3ee">@4</tspan> value="Free"</text>
+<text x="42.6" y="242" fill="#e6edf3">- checkbox "I agree" <tspan fill="#22d3ee">@5</tspan></text>
+<text x="42.6" y="264" fill="#e6edf3">- button "Submit" <tspan fill="#22d3ee">@6</tspan></text>
+<text x="26.0" y="286" fill="#e6edf3">- clickable "Open card" <tspan fill="#22d3ee">@7</tspan></text>
+<text x="26.0" y="308" fill="#e6edf3"></text>
+<text x="26.0" y="330" fill="#3fb950">$</text><text x="42.6" y="330" fill="#e6edf3">mb click <tspan fill="#22d3ee">@7</tspan> -s</text>
+<text x="26.0" y="352" fill="#3fb950">ok</text><text x="50.9" y="352" fill="#8b96ad">clicked <tspan fill="#22d3ee">@7</tspan> — http://127.0.0.1:8099/form.html</text>
+<text x="26.0" y="374" fill="#a5b4fc" font-weight="600"># Fixture Form — http://127.0.0.1:8099/form.html</text>
+<text x="26.0" y="396" fill="#5b6780" font-style="italic">(diff vs last snapshot: +1 -1, 7 unchanged)</text>
+<text x="26.0" y="418" fill="#f778ba">- - clickable "Open card" <tspan fill="#22d3ee">@7</tspan></text>
+<text x="26.0" y="440" fill="#3fb950">+ - clickable "card clicked" <tspan fill="#22d3ee">@7</tspan></text>
+<text x="26.0" y="462" fill="#e6edf3"></text>
+<text x="26.0" y="484" fill="#3fb950">$</text><text x="42.6" y="484" fill="#e6edf3">mb fill <tspan fill="#22d3ee">@3</tspan> "Ada Lovelace" -s</text>
+<text x="26.0" y="506" fill="#3fb950">ok</text><text x="50.9" y="506" fill="#8b96ad">filled <tspan fill="#22d3ee">@3</tspan></text>
+<text x="26.0" y="528" fill="#5b6780" font-style="italic">(diff vs last snapshot: +1 -1, 7 unchanged)</text>
+<text x="42.6" y="550" fill="#f778ba">- form</text>
+<text x="26.0" y="572" fill="#f778ba">-   - [textbox Name]<tspan fill="#22d3ee">@3</tspan></text>
+<text x="26.0" y="594" fill="#3fb950">+   - [textbox Name="Ada Lovelace"]<tspan fill="#22d3ee">@3</tspan></text>
+</svg>

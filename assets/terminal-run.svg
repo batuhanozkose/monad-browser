@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 823 324" width="823" height="324" font-family="'SFMono-Regular', ui-monospace, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13.5">
+<rect width="823" height="324" rx="12" fill="#0b1020"/>
+<rect x="0.5" y="0.5" width="822" height="323" rx="12" fill="none" stroke="#232f4b"/>
+<path d="M0 12 A12 12 0 0 1 12 0 H811 A12 12 0 0 1 823 12 V42 H0 Z" fill="#121a2e"/>
+<line x1="0" y1="42" x2="823" y2="42" stroke="#232f4b"/>
+<circle cx="26" cy="21.0" r="6" fill="#ff5f57"/>
+<circle cx="44" cy="21.0" r="6" fill="#febc2e"/>
+<circle cx="62" cy="21.0" r="6" fill="#28c840"/>
+<text x="92" y="26.0" fill="#8b96ad" font-size="13">mb run — whole task, one call</text>
+<text x="26.0" y="66" fill="#3fb950">$</text><text x="42.6" y="66" fill="#e6edf3">mb run '</text>
+<text x="59.2" y="88" fill="#e6edf3">await goto("books.toscrape.com");</text>
+<text x="59.2" y="110" fill="#e6edf3">const titles = [];</text>
+<text x="59.2" y="132" fill="#e6edf3">for (let i = 0; i &lt; 3; i++) {</text>
+<text x="75.8" y="154" fill="#e6edf3">titles.push(...await js("[...document.querySelectorAll(\"h3 a\")].map(a =&gt; a.title)"));</text>
+<text x="75.8" y="176" fill="#e6edf3">await click("text=next");</text>
+<text x="59.2" y="198" fill="#e6edf3">}</text>
+<text x="59.2" y="220" fill="#e6edf3">return titles.length;</text>
+<text x="42.6" y="242" fill="#e6edf3">'</text>
+<text x="26.0" y="264" fill="#e6edf3">60</text>
+<text x="26.0" y="286" fill="#e6edf3"></text>
+<text x="26.0" y="308" fill="#a5b4fc" font-weight="600"># three pages paged through, 60 titles collected — one agent turn, one line back</text>
+</svg>

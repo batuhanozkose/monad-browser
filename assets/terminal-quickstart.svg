@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 948 544" width="948" height="544" font-family="'SFMono-Regular', ui-monospace, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13.5">
+<rect width="948" height="544" rx="12" fill="#0b1020"/>
+<rect x="0.5" y="0.5" width="947" height="543" rx="12" fill="none" stroke="#232f4b"/>
+<path d="M0 12 A12 12 0 0 1 12 0 H936 A12 12 0 0 1 948 12 V42 H0 Z" fill="#121a2e"/>
+<line x1="0" y1="42" x2="948" y2="42" stroke="#232f4b"/>
+<circle cx="26" cy="21.0" r="6" fill="#ff5f57"/>
+<circle cx="44" cy="21.0" r="6" fill="#febc2e"/>
+<circle cx="62" cy="21.0" r="6" fill="#28c840"/>
+<text x="92" y="26.0" fill="#8b96ad" font-size="13">mb — news.ycombinator.com</text>
+<text x="26.0" y="66" fill="#3fb950">$</text><text x="42.6" y="66" fill="#e6edf3">mb open news.ycombinator.com</text>
+<text x="26.0" y="88" fill="#3fb950">ok</text><text x="50.9" y="88" fill="#8b96ad">"Hacker News" https://news.ycombinator.com/</text>
+<text x="26.0" y="110" fill="#e6edf3"></text>
+<text x="26.0" y="132" fill="#3fb950">$</text><text x="42.6" y="132" fill="#e6edf3">mb snapshot -i</text>
+<text x="26.0" y="154" fill="#a5b4fc" font-weight="600"># Hacker News — https://news.ycombinator.com/</text>
+<text x="26.0" y="176" fill="#e6edf3">- link <tspan fill="#22d3ee">@1</tspan></text>
+<text x="26.0" y="198" fill="#e6edf3">- [Hacker News]<tspan fill="#22d3ee">@2</tspan> [new]<tspan fill="#22d3ee">@3</tspan> [past]<tspan fill="#22d3ee">@4</tspan> [comments]<tspan fill="#22d3ee">@5</tspan> [ask]<tspan fill="#22d3ee">@6</tspan> [show]<tspan fill="#22d3ee">@7</tspan> [jobs]<tspan fill="#22d3ee">@8</tspan> [submit]<tspan fill="#22d3ee">@9</tspan> [login]<tspan fill="#22d3ee">@10</tspan></text>
+<text x="26.0" y="220" fill="#e6edf3">- link <tspan fill="#22d3ee">@11</tspan></text>
+<text x="26.0" y="242" fill="#e6edf3">- [IRCv3]<tspan fill="#22d3ee">@12</tspan> [ircv3.net]<tspan fill="#22d3ee">@13</tspan> [basilikum]<tspan fill="#22d3ee">@14</tspan> [40 minutes ago]<tspan fill="#22d3ee">@15</tspan> [hide]<tspan fill="#22d3ee">@16</tspan> [31 comments]<tspan fill="#22d3ee">@17</tspan></text>
+<text x="26.0" y="264" fill="#e6edf3">- link <tspan fill="#22d3ee">@18</tspan></text>
+<text x="26.0" y="286" fill="#e6edf3">- [LineageOS 24.0]<tspan fill="#22d3ee">@19</tspan> [lineageos.org]<tspan fill="#22d3ee">@20</tspan> [timschumi]<tspan fill="#22d3ee">@21</tspan> [4 hours ago]<tspan fill="#22d3ee">@22</tspan> [hide]<tspan fill="#22d3ee">@23</tspan> [33 comments]<tspan fill="#22d3ee">@24</tspan></text>
+<text x="42.6" y="308" fill="#e6edf3">…</text>
+<text x="26.0" y="330" fill="#e6edf3"></text>
+<text x="26.0" y="352" fill="#3fb950">$</text><text x="42.6" y="352" fill="#e6edf3">mb click <tspan fill="#22d3ee">@17</tspan> -s</text>
+<text x="26.0" y="374" fill="#3fb950">ok</text><text x="50.9" y="374" fill="#8b96ad">clicked <tspan fill="#22d3ee">@17</tspan> — https://news.ycombinator.com/item?id=50041540</text>
+<text x="26.0" y="396" fill="#a5b4fc" font-weight="600"># IRCv3 | Hacker News — https://news.ycombinator.com/item?id=50041540</text>
+<text x="26.0" y="418" fill="#e6edf3">- [link]<tspan fill="#22d3ee">@1</tspan> [Hacker News]<tspan fill="#22d3ee">@2</tspan> [new]<tspan fill="#22d3ee">@3</tspan> | [past]<tspan fill="#22d3ee">@4</tspan> | [comments]<tspan fill="#22d3ee">@5</tspan> | [ask]<tspan fill="#22d3ee">@6</tspan> | [show]<tspan fill="#22d3ee">@7</tspan> | [jobs]<tspan fill="#22d3ee">@8</tspan> …</text>
+<text x="26.0" y="440" fill="#e6edf3">- [link]<tspan fill="#22d3ee">@11</tspan> [IRCv3]<tspan fill="#22d3ee">@12</tspan> ([ircv3.net]<tspan fill="#22d3ee">@13</tspan>)</text>
+<text x="26.0" y="462" fill="#e6edf3">- 44 points by [basilikum]<tspan fill="#22d3ee">@14</tspan> [39 minutes ago]<tspan fill="#22d3ee">@15</tspan> | [hide]<tspan fill="#22d3ee">@16</tspan> | [past]<tspan fill="#22d3ee">@17</tspan> | [favorite]<tspan fill="#22d3ee">@18</tspan> | [30 comments]<tspan fill="#22d3ee">@19</tspan></text>
+<text x="26.0" y="484" fill="#e6edf3">- form</text>
+<text x="42.6" y="506" fill="#e6edf3">- textbox <tspan fill="#22d3ee">@20</tspan></text>
+<text x="42.6" y="528" fill="#e6edf3">- [help]<tspan fill="#22d3ee">@21</tspan> [add comment]<tspan fill="#22d3ee">@22</tspan></text>
+</svg>
