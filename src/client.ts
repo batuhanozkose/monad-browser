@@ -3,9 +3,10 @@ import { connect } from "node:net";
 import { spawn } from "node:child_process";
 import { existsSync, openSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { socketPath, stateDir, type Response } from "./paths.js";
 
-const cliPath = () => new URL("./cli.js", import.meta.url).pathname;
+const cliPath = () => fileURLToPath(new URL("./cli.js", import.meta.url));
 
 export function request(session: string, argv: string[], timeoutMs = 120_000): Promise<Response> {
   return new Promise((resolve, reject) => {

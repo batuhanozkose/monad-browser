@@ -5,13 +5,15 @@ import { resolve as resolvePath } from "node:path";
 import vm from "node:vm";
 import type { Browser } from "./browser.js";
 
-export async function runScript(browser: Browser, code: string, cwd: string, timeoutMs = 120_000): Promise<string> {
+export async function runScript(browser: Browser, code: string, cwd: string, timeoutMs = 120_000, signal?: AbortSignal): Promise<string> {
   const out: string[] = [];
   let step = 0;
   let lastStep = "";
   const fmt = (v: unknown) => (typeof v === "string" ? v : v === undefined ? "undefined" : JSON.stringify(v, null, 0));
   const track = <F extends (...a: any[]) => Promise<any>>(name: string, fn: F): F =>
     (async (...a: any[]) => {
+      // Cooperative cancellation: the client hung up, so stop before the next step instead of running the whole plan.
+      if (signal?.aborted) throw new Error("aborted: client disconnected");
       step++;
       lastStep = `${name}(${a.map((x) => JSON.stringify(x)).join(", ").slice(0, 80)})`;
       return fn(...a);

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  node:
+    name: build & test (Node)
+    runs-on: ubuntu-latest
+    env:
+      MONAD_NO_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: unit + e2e tests
+        run: node --test test/*.test.mjs
+
+  native:
+    name: native client (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: native/go.mod
+      - run: go vet ./...
+        working-directory: native
+      - run: go build ./...
+        working-directory: native

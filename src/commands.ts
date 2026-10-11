@@ -6,7 +6,7 @@ import type { Browser } from "./browser.js";
 import { DEFAULT_MAX_LINES } from "./snapshot.js";
 import { runScript, RUN_HELP } from "./run.js";
 
-export type Ctx = { browser: Browser; cwd: string };
+export type Ctx = { browser: Browser; cwd: string; signal?: AbortSignal };
 type Flags = Record<string, string | boolean>;
 type Cmd = { usage: string; run: (ctx: Ctx, args: string[], flags: Flags) => Promise<string> };
 
@@ -43,7 +43,7 @@ export const COMMANDS: Record<string, Cmd> = {
       const code = typeof flags.f === "string" ? readFileSync(resolvePath(ctx.cwd, flags.f), "utf8")
         : typeof flags.file === "string" ? readFileSync(resolvePath(ctx.cwd, flags.file), "utf8") : args.join(" ");
       if (!code.trim()) throw new Error(`usage: ${this.usage}`);
-      return runScript(ctx.browser, code, ctx.cwd, num(flags.timeout, 120_000));
+      return runScript(ctx.browser, code, ctx.cwd, num(flags.timeout, 120_000), ctx.signal);
     },
   },
   open: {

@@ -16,12 +16,21 @@ type Tab = {
   mainFrame?: string; navAt: number; loadAt: number; fullLoadAt: number;
   oopifs: Map<string, string>; // out-of-process iframe frameId → its CDP session
   last?: { key: string; lines: string[] };
+  storageScripts: string[]; // Page.addScriptToEvaluateOnNewDocument ids from state load, so a reload can replace them
 };
 
 const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", media: "Media", stylesheet: "Stylesheet", css: "Stylesheet" };
 
 const STALE_MS = 2000;
 const DOM_TYPES = new Set(["Document", "Script", "XHR", "Fetch", "Stylesheet"]);
+
+/** Blank out string literals and comments so keyword probes don't fire inside them. */
+const stripLiterals = (s: string) => s
+  .replace(/`(?:\\.|[^`\\])*`/g, "``")
+  .replace(/'(?:\\.|[^'\\])*'/g, "''")
+  .replace(/"(?:\\.|[^"\\])*"/g, '""')
+  .replace(/\/\*[\s\S]*?\*\//g, " ")
+  .replace(/\/\/[^\n]*/g, " ");
 
 export class Browser {
   cdp!: CDP;
@@ -79,7 +88,7 @@ export class Browser {
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map() };
+    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map(), storageScripts: [] };
     this.tabs.set(targetId, tab);
     const s = sessionId;
     const on = (ev: string, fn: (p: any) => void) => this.cdp.on(ev, (p, sid) => { if (sid === s) fn(p); });
@@ -223,9 +232,11 @@ export class Browser {
   async evaluate(expression: string, awaitPromise = true) {
     // `return …` → async function body; a lone `await` expression → async arrow; anything else is evaluated
     // as-is (statements evaluate to their last expression, like the devtools console).
-    const src = /\breturn\b/.test(expression) ? `(async () => { ${expression} })()`
-      : /\bawait\b/.test(expression) && !/;\s*\S/.test(expression) ? `(async () => (${expression.replace(/;\s*$/, "")}))()`
-      : /\bawait\b/.test(expression) ? `(async () => { ${expression} })()`
+    // Probe a copy with strings/comments stripped so `eval '"return 5"'` is not mistaken for a function body.
+    const code = stripLiterals(expression);
+    const src = /\breturn\b/.test(code) ? `(async () => { ${expression} })()`
+      : /\bawait\b/.test(code) && !/;\s*\S/.test(code) ? `(async () => (${expression.replace(/;\s*$/, "")}))()`
+      : /\bawait\b/.test(code) ? `(async () => { ${expression} })()`
       : expression;
     const r: any = await this.send("Runtime.evaluate", { expression: src, awaitPromise, returnByValue: true, userGesture: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
@@ -245,10 +256,15 @@ export class Browser {
       const cookies = state.cookies.map(({ size, session, ...c }: any) => (session || c.expires < 0 ? { ...c, expires: undefined } : c));
       await this.send("Network.setCookies", { cookies });
     }
+    const tab = this.tab();
+    // A second state load must replace the first, not stack another set of new-document scripts on the tab.
+    for (const id of tab.storageScripts) await this.cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: id }, tab.sessionId).catch(() => {});
+    tab.storageScripts = [];
     let applied = 0;
     for (const o of state.origins ?? []) {
       const js = `(() => { if (location.origin !== ${JSON.stringify(o.origin)}) return false; for (const [k, v] of Object.entries(${JSON.stringify(o.local ?? {})})) localStorage.setItem(k, v); for (const [k, v] of Object.entries(${JSON.stringify(o.session ?? {})})) sessionStorage.setItem(k, v); return true; })()`;
-      await this.send("Page.addScriptToEvaluateOnNewDocument", { source: js });
+      const added: any = await this.send("Page.addScriptToEvaluateOnNewDocument", { source: js }).catch(() => null);
+      if (added?.identifier) tab.storageScripts.push(added.identifier);
       const r: any = await this.send("Runtime.evaluate", { expression: js, returnByValue: true }).catch(() => null);
       if (r?.result?.value === true) applied++;
     }
@@ -411,8 +427,9 @@ export class Browser {
     const end = Date.now() + (opts.timeoutMs ?? this.actionTimeout);
     let reason = "not found";
     let scrolled = false;
-    // A page still loading scripts may be about to hydrate (and replace) the target: give it up to 500 ms of quiet first.
-    await this.networkIdle(50, 500);
+    // A page still loading scripts may be about to hydrate (and replace) the target: give it up to 500 ms of quiet
+    // first. Returns immediately when already idle; on very chatty pages set MONAD_PRE_ACTION_QUIET_MS=0 to opt out.
+    await this.networkIdle(50, Number(process.env.MONAD_PRE_ACTION_QUIET_MS ?? 500));
     let goneSince: number | undefined;
     let verify = false; // refs are trusted first (saves two round trips); a detached node takes the self-healing path
     while (true) {
@@ -576,7 +593,8 @@ export class Browser {
     if (!def) throw new Error(`unknown key: ${keyName}`);
     const before = Date.now();
     const base = { key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, modifiers };
-    const text = modifiers & ~8 ? undefined : def.text; // no text when Ctrl/Alt/Meta held
+    let text = modifiers & ~8 ? undefined : def.text; // no text when Ctrl/Alt/Meta held
+    if (text && modifiers & 8 && keyName.length === 1 && /[a-z]/.test(keyName)) text = keyName.toUpperCase();
     await this.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base, text, unmodifiedText: text });
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
     await this.settle(before);

@@ -36,7 +36,11 @@ export async function runDaemon(session: string, opts: BrowserOptions & { idleMi
     let req: Request;
     try { req = JSON.parse(line); } catch { socket.end(JSON.stringify({ ok: false, error: "bad request" }) + "\n"); return; }
     bump();
+    // If the client hangs up while its command is queued or running, abort it and drop the response.
+    const ac = new AbortController();
+    socket.on("close", () => ac.abort());
     queue = queue.then(async () => {
+      if (ac.signal.aborted) return;
       const t0 = Date.now();
       let res: Response;
       if (req.argv[0] === "stop") {
@@ -45,10 +49,11 @@ export async function runDaemon(session: string, opts: BrowserOptions & { idleMi
       }
       if (req.argv[0] === "status") res = { ok: true, out: `running session=${session} pid=${process.pid}\n${browser.listTabs()}` };
       else {
-        try { res = { ok: true, out: await dispatch({ browser, cwd: req.cwd }, req.argv) }; }
+        try { res = { ok: true, out: await dispatch({ browser, cwd: req.cwd, signal: ac.signal }, req.argv) }; }
         catch (e: any) { res = { ok: false, error: e?.message ?? String(e) }; }
       }
       res.ms = Date.now() - t0;
+      if (socket.destroyed) return;
       socket.end(JSON.stringify(res) + "\n");
     });
   };

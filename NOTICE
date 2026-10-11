@@ -1,0 +1,20 @@
+monad-browser
+Copyright (c) monad-browser contributors
+Licensed under the MIT License (see LICENSE).
+
+This package ships no third-party runtime dependencies. It uses only the
+Node.js standard library (>=22) and, on Linux/macOS, an optional native thin
+client compiled from the Go source in `native/`.
+
+The benchmark harness in `bench/` is development-only and depends on the
+following packages, each under its own license:
+
+  - agent-browser (Apache-2.0)
+  - @playwright/cli, @playwright/mcp (Apache-2.0)
+  - chrome-devtools-mcp (Apache-2.0)
+  - dev-browser
+  - @modelcontextprotocol/sdk (MIT)
+  - js-tiktoken (MIT)
+
+Monad-browser is not affiliated with Google, Microsoft, Vercel or any other
+project named above; those names are used only to describe interoperability.
