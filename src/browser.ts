@@ -5,6 +5,28 @@ import { renderDiff } from "./diff.js";
 import { takeSnapshot, newRefTable, elKey, type El, type RefTable, type SnapshotOptions } from "./snapshot.js";
 import { KEYS, modifierBit } from "./keys.js";
 
+/**
+ * Does `code` parse when wrapped this way? `new Function` only compiles — it is never
+ * called — and it runs here in the daemon rather than in the page, so page CSP does not
+ * apply. The parser is the same one the page will use.
+ */
+function parsesAs(code: string, wrap: (s: string) => string): boolean {
+  if (!code) return false;
+  try {
+    // eslint-disable-next-line no-new-func
+    new Function(`return ${wrap(code)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A single expression, e.g. `[1,2].map(function(n){return n*2})`. */
+const isExpression = (code: string) => parsesAs(code, (s) => `(${s}\n)`);
+
+/** An expression using top-level `await`, which only parses inside an async function. */
+const isAsyncExpression = (code: string) => parsesAs(code, (s) => `(async () => (${s}\n))`);
+
 export type BrowserOptions = {
   cdpEndpoint?: string; executable?: string; userDataDir?: string; headful?: boolean;
   block?: string[]; // resource types to block: image, font, media, stylesheet
@@ -221,12 +243,18 @@ export class Browser {
   }
 
   async evaluate(expression: string, awaitPromise = true) {
-    // `return …` → async function body; a lone `await` expression → async arrow; anything else is evaluated
-    // as-is (statements evaluate to their last expression, like the devtools console).
-    const src = /\breturn\b/.test(expression) ? `(async () => { ${expression} })()`
-      : /\bawait\b/.test(expression) && !/;\s*\S/.test(expression) ? `(async () => (${expression.replace(/;\s*$/, "")}))()`
-      : /\bawait\b/.test(expression) ? `(async () => { ${expression} })()`
-      : expression;
+    // Is this a single expression or a statement list? Ask the parser, not a regex.
+    // A `/return/` test cannot tell a top-level `return` (which needs a function body)
+    // from one inside a nested callback (which is just part of an expression), and
+    // misreading the second case wraps the expression in a body: the value is
+    // discarded, the call still succeeds, and the caller gets `undefined`.
+    const code = expression.trim();
+    const mentionsAwait = /\bawait\b/.test(code);
+    const src = isExpression(code)
+      ? code
+      : isAsyncExpression(code) ? `(async () => (${code.replace(/;\s*$/, "")}))()`
+      : mentionsAwait || /\breturn\b/.test(code) ? `(async () => { ${code} })()`
+      : code; // a statement list: leave it be so the console-style completion value survives
     const r: any = await this.send("Runtime.evaluate", { expression: src, awaitPromise, returnByValue: true, userGesture: true });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result?.value;
