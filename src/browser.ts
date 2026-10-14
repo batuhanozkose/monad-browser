@@ -341,7 +341,12 @@ export class Browser {
     if (name) params.accessibleName = name;
     if (role) params.role = role;
     const { nodes } = await this.send("Accessibility.queryAXTree", params);
-    const ids: number[] = nodes.filter((n: any) => !n.ignored && n.backendDOMNodeId).map((n: any) => n.backendDOMNodeId);
+    // AX trees contain non-element nodes (StaticText/InlineTextBox/LineBreak). They have layout quads, so the
+    // visibility filter below kept them, and callOn() then acted on a Text node (no getClientRects).
+    const NON_ELEMENT = new Set(["StaticText", "InlineTextBox", "LineBreak", "none", "presentation"]);
+    const ids: number[] = nodes
+      .filter((n: any) => !n.ignored && n.backendDOMNodeId && !NON_ELEMENT.has(n.role?.value ?? ""))
+      .map((n: any) => n.backendDOMNodeId);
     const visible: number[] = [];
     for (const id of ids) { try { const { quads } = await this.send("DOM.getContentQuads", { backendNodeId: id }); if (quads?.length) visible.push(id); } catch { /* hidden */ } }
     return visible.length ? visible : ids;
