@@ -91,6 +91,22 @@ test("mcp server lists tools and calls them", { skip }, () => {
   assert.match(out[2].result.content[0].text, /\[textbox Name\]@3/);
 });
 
+test("text= targets the control, not its label's text node", { skip }, () => {
+  mb("open", `${F}/labels.html`);
+  // A sibling <label for> matches the AX name query too, as a StaticText node. It has layout quads,
+  // so it passed the visible filter and became the target — but it is not an element, so actions on
+  // it failed with "el.getClientRects is not a function".
+  const out = mb("run", `
+    await fill("text=Promo code", "SPRING");
+    await select("text=Plan", "pro");
+    await fill("text=Wrapped", "w");
+    await click("text=Go");
+    return await text("#out");
+  `);
+  assert.equal(out, "go SPRING / pro");
+  mb("open", `${F}/form.html`);
+});
+
 test("iframes (same-origin and out-of-process) are in the snapshot and clickable", { skip }, async () => {
   const { spawn } = await import("node:child_process");
   // Separate process: execFileSync blocks this event loop, so an in-process server could not answer.

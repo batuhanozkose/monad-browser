@@ -1,0 +1,8 @@
+<!doctype html><html><head><title>Fixture Labels</title></head><body>
+<h1>Labels</h1>
+<label for="promo">Promo code</label><input id="promo">
+<label for="plan">Plan</label><select id="plan"><option value="free">Free</option><option value="pro">Pro</option></select>
+<label for="go">Go</label><button id="go" onclick="document.getElementById('out').textContent='go '+document.getElementById('promo').value+' / '+document.getElementById('plan').value">Go</button>
+<label>Wrapped <input id="wrapped"></label>
+<p id="out"></p>
+</body></html>
