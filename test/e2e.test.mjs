@@ -48,6 +48,18 @@ test("navigation via click settles quickly", { skip }, () => {
   assert.match(mb("url"), /^Next/);
 });
 
+test("eval keeps the value of an expression that mentions return", { skip }, () => {
+  mb("open", `${F}/form.html`);
+  // A `return` inside a nested callback used to be read as a function body, so the whole
+  // expression was wrapped and its value silently discarded (exit 0, "undefined", no error).
+  assert.equal(mb("eval", "[1,2,3].map(function(n){return n*2})"), "[2,4,6]");
+  assert.equal(mb("eval", '(function(){return "hello"})()'), "hello");
+  assert.equal(mb("eval", "({ n: 1 })"), '{"n":1}');
+  // the statement form still works, with and without top-level await
+  assert.equal(mb("eval", "const a = 2; return a * 3"), "6");
+  assert.equal(mb("eval", 'await Promise.resolve("later")'), "later");
+});
+
 test("diff snapshot returns only changes", { skip }, () => {
   mb("open", `${F}/form.html`);
   mb("snapshot");
