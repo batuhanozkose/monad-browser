@@ -71,6 +71,7 @@ type Tab = {
   lastShotHash?: string;
   requests: Map<string, NetRequest>;
   routes: Route[];
+  fetchEnabled: boolean; // Fetch domain is enabled only while block types or routes exist
   storageScripts: string[]; // Page.addScriptToEvaluateOnNewDocument ids from state load, so a reload can replace them
   cache?: { at: number; version: string; sig: string; text: string }; // last snapshot + the page version it was taken at
 };
@@ -171,8 +172,13 @@ export class Browser {
 
   private async refreshFetch(tab: Tab) {
     const patterns = this.fetchPatterns(tab);
-    if (patterns.length) await this.cdp.send("Fetch.enable", { patterns }, tab.sessionId).catch(() => {});
-    else await this.cdp.send("Fetch.disable", {}, tab.sessionId).catch(() => {});
+    if (patterns.length) {
+      await this.cdp.send("Fetch.enable", { patterns }, tab.sessionId).catch(() => {});
+      tab.fetchEnabled = true;
+    } else if (tab.fetchEnabled) {
+      await this.cdp.send("Fetch.disable", {}, tab.sessionId).catch(() => {});
+      tab.fetchEnabled = false;
+    }
   }
 
   private async attach(targetId: string): Promise<Tab> {
@@ -181,7 +187,7 @@ export class Browser {
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
     const tab: Tab = {
       targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "",
-      navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map(), rev: 0, requests: new Map(), routes: [], storageScripts: [],
+      navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map(), rev: 0, requests: new Map(), routes: [], fetchEnabled: false, storageScripts: [],
     };
     this.tabs.set(targetId, tab);
     const s = sessionId;
