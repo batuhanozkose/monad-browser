@@ -3,8 +3,42 @@
 import { existsSync, readdirSync } from "node:fs";
 import { socketPath, stateDir } from "./paths.js";
 import { request, startDaemon, notListening } from "./client.js";
+import { loadConfig, type Config } from "./config.js";
 
-const LAUNCH_FLAGS = ["cdp", "headful", "profile", "block", "chrome", "idle", "proxy"];
+const LAUNCH_FLAGS = new Set([
+  "cdp", "headful", "profile", "block", "chrome", "idle", "proxy", "headers", "user-agent",
+  "ignore-https-errors", "init-script", "download-path", "color-scheme", "viewport", "extension",
+  "args", "no-auto-dialog",
+]);
+const BOOL_LAUNCH = new Set(["headful", "ignore-https-errors", "no-auto-dialog"]);
+
+const splitList = (v: unknown) => typeof v === "string" ? v.split(/[,\n]/).map((s) => s.trim()).filter(Boolean) : [];
+
+function parseViewport(v: unknown): { width: number; height: number; scale?: number } | undefined {
+  if (typeof v !== "string") return undefined;
+  const [w, h, s] = v.split("x").map(Number);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) throw new Error(`--viewport expects WxH or WxHxSCALE, got ${v}`);
+  return { width: w, height: h, scale: Number.isFinite(s) ? s : undefined };
+}
+
+function configLaunch(cfg: Config): string[] {
+  const out: string[] = [];
+  if (cfg.chrome) out.push("--chrome", cfg.chrome);
+  if (cfg.headful) out.push("--headful");
+  if (cfg.idleMinutes !== undefined) out.push("--idle", String(cfg.idleMinutes));
+  if (cfg.block?.length) out.push("--block", cfg.block.join(","));
+  if (cfg.proxy) out.push("--proxy", cfg.proxy);
+  if (cfg.headers && Object.keys(cfg.headers).length) out.push("--headers", JSON.stringify(cfg.headers));
+  if (cfg.userAgent) out.push("--user-agent", cfg.userAgent);
+  if (cfg.ignoreHttpsErrors) out.push("--ignore-https-errors");
+  if (cfg.initScripts?.length) out.push("--init-script", cfg.initScripts.join(","));
+  if (cfg.downloadPath) out.push("--download-path", cfg.downloadPath);
+  if (cfg.colorScheme) out.push("--color-scheme", cfg.colorScheme);
+  if (cfg.viewport) out.push("--viewport", `${cfg.viewport.width}x${cfg.viewport.height}${cfg.viewport.scale ? `x${cfg.viewport.scale}` : ""}`);
+  if (cfg.autoDialog === false) out.push("--no-auto-dialog");
+  if (cfg.extraArgs?.length) out.push("--args", JSON.stringify(cfg.extraArgs));
+  return out;
+}
 
 async function liveSessions() {
   if (!existsSync(stateDir())) return [];
@@ -31,6 +65,13 @@ async function main() {
     const [, session, ...rest] = argv;
     const [{ parseArgs }, { runDaemon }] = await Promise.all([import("./commands.js"), import("./daemon.js")]);
     const { flags } = parseArgs(rest);
+    const initScripts = splitList(flags["init-script"]);
+    let extraArgs = splitList(flags.args);
+    if (typeof flags.args === "string" && flags.args.trim().startsWith("[")) {
+      try { extraArgs = JSON.parse(flags.args); } catch { /* fall back to the comma list */ }
+    }
+    for (const ext of splitList(flags.extension)) extraArgs.push(`--load-extension=${ext}`);
+    const headers = typeof flags.headers === "string" ? JSON.parse(flags.headers) : undefined;
     await runDaemon(session, {
       cdpEndpoint: flags.cdp as string | undefined,
       headful: !!flags.headful,
@@ -38,28 +79,81 @@ async function main() {
       executable: flags.chrome as string | undefined,
       block: typeof flags.block === "string" ? flags.block.split(",") : [],
       proxy: flags.proxy as string | undefined,
+      headers,
+      userAgent: flags["user-agent"] as string | undefined,
+      ignoreHttpsErrors: !!flags["ignore-https-errors"],
+      initScripts: initScripts.length ? initScripts : undefined,
+      downloadPath: flags["download-path"] as string | undefined,
+      colorScheme: (flags["color-scheme"] as any) || undefined,
+      viewport: parseViewport(flags.viewport),
+      autoDialog: flags["no-auto-dialog"] ? false : undefined,
+      extraArgs: extraArgs.length ? extraArgs : undefined,
       idleMinutes: flags.idle !== undefined ? Number(flags.idle) : undefined,
     });
     return;
   }
 
+  // Config may be selected before the command; CLI flags still win over its values.
+  let configPath: string | undefined;
+  for (let i = 0; i < argv.length; i++) if (argv[i] === "--config") { configPath = argv[i + 1]; break; }
+  const cfg = loadConfig(process.cwd(), configPath);
+  if (cfg.noSandbox) process.env.MONAD_NO_SANDBOX = "1";
+  if (cfg.snapshotCacheMs !== undefined) process.env.MONAD_SNAPSHOT_CACHE_MS = String(cfg.snapshotCacheMs);
+  if (cfg.actionTimeout !== undefined) process.env.MONAD_ACTION_TIMEOUT = String(cfg.actionTimeout);
+  if (cfg.screenshotDir) process.env.MONAD_SCREENSHOT_DIR = cfg.screenshotDir;
+  if (cfg.screenshotFormat) process.env.MONAD_SCREENSHOT_FORMAT = cfg.screenshotFormat;
+  if (cfg.screenshotQuality !== undefined) process.env.MONAD_SCREENSHOT_QUALITY = String(cfg.screenshotQuality);
+
   // Global options come before the command.
   let session = process.env.MONAD_SESSION || "default";
-  const launch: string[] = [];
+  const launch: string[] = configLaunch(cfg);
   while (argv[0]?.startsWith("--")) {
     const [k, v] = argv[0].slice(2).split("=", 2);
     if (k === "session") { session = v ?? argv[1]; argv = argv.slice(v ? 1 : 2); continue; }
-    if (LAUNCH_FLAGS.includes(k)) {
-      if (k === "headful") { launch.push("--headful"); argv = argv.slice(1); }
-      else { launch.push(`--${k}`, v ?? argv[1]); argv = argv.slice(v ? 1 : 2); }
+    if (k === "config") { argv = argv.slice(v ? 1 : 2); continue; }
+    if (k === "help") break;
+    if (LAUNCH_FLAGS.has(k)) {
+      if (BOOL_LAUNCH.has(k)) { launch.push(`--${k}`); argv = argv.slice(1); continue; }
+      const val = v ?? argv[1];
+      if (val === undefined) throw new Error(`--${k} needs a value`);
+      launch.push(`--${k}`, val);
+      argv = argv.slice(v ? 1 : 2);
       continue;
     }
-    if (k === "help") break;
     break;
   }
   const cmd = argv[0];
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { const { helpText } = await import("./commands.js"); console.log(helpText()); return; }
   if (cmd === "--version" || cmd === "version") { console.log("monad-browser 0.1.0-alpha.0"); return; }
+
+  if (cmd === "doctor") {
+    const { doctor } = await import("./doctor.js");
+    console.log(doctor(argv.includes("--fix")));
+    return;
+  }
+  if (cmd === "skills") {
+    const { listSkills, getSkill, skillPath } = await import("./skill.js");
+    const sub = argv[1] ?? "list";
+    if (sub === "list") { console.log(listSkills()); return; }
+    if (sub === "get") { console.log(getSkill(argv[2] ?? "core", argv.includes("--full"))); return; }
+    if (sub === "path") { console.log(skillPath(argv[2] ?? "core")); return; }
+    throw new Error("usage: mb skills list | mb skills get <name> [--full] | mb skills path [name]");
+  }
+  if (cmd === "read") {
+    const { parseArgs } = await import("./commands.js");
+    const { args, flags } = parseArgs(argv.slice(1));
+    if (args[0]) {
+      const { readUrl } = await import("./read.js");
+      const out = await readUrl(args[0], {
+        raw: !!flags.raw, requireMd: !!flags["require-md"], outline: !!flags.outline,
+        filter: typeof flags.filter === "string" ? flags.filter : undefined,
+        llms: flags.llms === "index" || flags.llms === "full" ? flags.llms : undefined,
+        timeoutMs: flags.timeout !== undefined ? Number(flags.timeout) : undefined,
+      });
+      process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+      return;
+    }
+  }
 
   if (cmd === "mcp") { const { runMcp } = await import("./mcp.js"); await runMcp(session, launch); return; }
   if (cmd === "install-skill") { const { installSkill } = await import("./skill.js"); console.log(installSkill(argv.slice(1))); return; }

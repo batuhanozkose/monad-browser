@@ -34,9 +34,53 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "browser_snapshot",
-    description: "Accessibility snapshot with @N refs. diff=true returns only what changed since the last one.",
-    inputSchema: obj({ interactive: { type: "boolean", description: "only interactive elements" }, diff: { type: "boolean" } }),
-    argv: (a) => ["snapshot", ...(a.interactive ? ["-i"] : []), ...(a.diff ? ["-d"] : [])],
+    description: "Accessibility snapshot with @N refs. diff=true returns only what changed since the last one; full=true resets the diff baseline; json=true returns a compact full/unchanged/delta patch with revisions.",
+    inputSchema: obj({
+      interactive: { type: "boolean", description: "only interactive elements" },
+      diff: { type: "boolean" },
+      full: { type: "boolean" },
+      json: { type: "boolean" },
+    }),
+    argv: (a) => ["snapshot", ...(a.interactive ? ["-i"] : []), ...(a.diff ? ["-d"] : []), ...(a.full ? ["--full"] : []), ...(a.json ? ["--json"] : [])],
+  },
+  {
+    name: "browser_read",
+    description: "Read a URL as markdown/text without launching Chrome, or the active tab's readable text. Prefers markdown/llms.txt and strips navigation from HTML.",
+    inputSchema: obj({
+      url: str("optional URL; omit to read the active tab"),
+      outline: { type: "boolean", description: "headings only" },
+      filter: str("keep sections containing this text"),
+      raw: { type: "boolean", description: "return the response body unchanged" },
+    }),
+    argv: (a) => ["read", ...(a.url ? [a.url] : []), ...(a.outline ? ["--outline"] : []), ...(a.filter ? ["--filter", a.filter] : []), ...(a.raw ? ["--raw"] : [])],
+  },
+  {
+    name: "browser_get",
+    description: "Read one value from the page instead of a whole snapshot: text, html, value, attr, title, url, count, box, or styles.",
+    inputSchema: obj({
+      what: { type: "string", enum: ["text", "html", "value", "attr", "title", "url", "count", "box", "styles"] },
+      target: str("optional @N/selector for element queries"),
+      name: str("attribute name for attr"),
+    }, ["what"]),
+    argv: (a) => ["get", a.what, ...(a.target ? [a.target] : []), ...(a.name ? [a.name] : [])],
+  },
+  {
+    name: "browser_find",
+    description: "Semantic locator: find by role, text, label, placeholder, alt, title, testid, first, last, or nth and act (click/fill/check/uncheck/hover/text/focus).",
+    inputSchema: obj({
+      locator: { type: "string", enum: ["role", "text", "label", "placeholder", "alt", "title", "testid", "first", "last", "nth"] },
+      value: str("locator value"),
+      action: { type: "string", enum: ["click", "fill", "check", "uncheck", "hover", "text", "focus"] },
+      text: str("value for fill"),
+      name: str("accessible-name filter for role"),
+    }, ["locator", "value", "action"]),
+    argv: (a) => ["find", a.locator, a.value, a.action, ...(a.text !== undefined ? [a.text] : []), ...(a.name ? ["--name", a.name] : [])],
+  },
+  {
+    name: "browser_check",
+    description: "Check or uncheck a checkbox/radio (checked=false unchecks).",
+    inputSchema: obj({ target: str("element"), checked: { type: "boolean" } }, ["target"]),
+    argv: (a) => [a.checked === false ? "uncheck" : "check", a.target],
   },
   {
     name: "browser_click",
@@ -77,7 +121,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "browser_command",
-    description: "Any monad-browser CLI command as argv, e.g. [\"tabs\"], [\"back\"], [\"state\",\"save\",\"auth.json\"], [\"wait\",\"text=Done\"].",
+    description: "Any monad-browser CLI command as argv, e.g. [\"tabs\"], [\"back\"], [\"cookies\"], [\"network\",\"requests\"], [\"set\",\"viewport\",\"390\",\"844\"], [\"upload\",\"@3\",\"a.pdf\"], [\"pdf\",\"out.pdf\"], [\"diff\",\"snapshot\"].",
     inputSchema: obj({ argv: { type: "array", items: { type: "string" } } }, ["argv"]),
     argv: (a) => a.argv,
   },
@@ -105,7 +149,7 @@ export async function runMcp(session: string, launch: string[]) {
           protocolVersion: params?.protocolVersion ?? "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "monad-browser", version: "0.1.0-alpha.0" },
-          instructions: "Headless browser. Prefer browser_run for multi-step work. Actions return only what changed on the page.",
+          instructions: "Headless browser. Prefer browser_run for multi-step work and browser_read for docs/articles. Actions return only what changed on the page; browser_get/browser_find avoid full snapshots.",
         });
       case "notifications/initialized":
       case "notifications/cancelled":

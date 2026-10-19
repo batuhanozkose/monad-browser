@@ -35,6 +35,55 @@ export function diffLines(a: string[], b: string[]): Op[] {
 
 const indent = (s: string) => s.length - s.trimStart().length;
 
+/** A single contiguous replacement that turns one snapshot tree into another. */
+export type TreeChange = { startLine: number; deleteCount: number; lines: string[] };
+
+/**
+ * Compute the smallest contiguous splice between two snapshots (common prefix + suffix).
+ * This is the machine-applicable counterpart of `renderDiff`: cheap and exact, but it
+ * covers everything between two distant changes. Callers fall back to a full snapshot
+ * when the splice is not worth sending.
+ */
+export function treeChange(prev: string[], next: string[]): TreeChange {
+  const max = Math.min(prev.length, next.length);
+  let prefix = 0;
+  while (prefix < max && prev[prefix] === next[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < max - prefix && prev[prev.length - 1 - suffix] === next[next.length - 1 - suffix]) suffix++;
+  return {
+    startLine: prefix,
+    deleteCount: prev.length - prefix - suffix,
+    lines: next.slice(prefix, next.length - suffix),
+  };
+}
+
+/** Apply a `treeChange` to a previous snapshot. Returns a new array; `prev` is not mutated. */
+export function applyTreeChange(prev: string[], change: TreeChange): string[] {
+  const out = prev.slice();
+  out.splice(change.startLine, change.deleteCount, ...change.lines);
+  return out;
+}
+
+/** Glob for URLs and selectors: `*` stays inside a path segment, `**` crosses segments. */
+export function globToRegExp(pattern: string): RegExp {
+  let out = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") { out += ".*"; i++; }
+      else out += "[^/]*";
+    } else if (c === "?") out += ".";
+    else out += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(out + "$");
+}
+
+/** Match a URL against a glob; a pattern without wildcards also matches as a substring. */
+export function matchGlob(value: string, pattern: string): boolean {
+  if (!/[*?]/.test(pattern)) return value.includes(pattern);
+  return globToRegExp(pattern).test(value);
+}
+
 /** Render a compact diff: changed lines with +/-, each hunk preceded by its nearest unchanged ancestor line. */
 export function renderDiff(prev: string[], next: string[]): { text: string; added: number; removed: number; same: number } {
   const ops = diffLines(prev, next);
