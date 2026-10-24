@@ -5,10 +5,30 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   node:
-    name: build & test (Node)
-    runs-on: ubuntu-latest
+    name: build & test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x64
+          - os: macos-latest
+            name: macos-arm64
+          - os: macos-15-intel
+            name: macos-x64
+          - os: windows-latest
+            name: windows-x64
     env:
       MONAD_NO_SANDBOX: "1"
     steps:
@@ -17,15 +37,71 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: native/go.mod
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - name: unit + e2e tests
-        run: node --test test/*.test.mjs
+      - name: unit tests
+        run: node --test test/unit.test.mjs
+      - name: detect Chrome
+        id: chrome
+        shell: bash
+        run: |
+          if node --input-type=module -e "import { findChrome } from './dist/chrome.js'; process.exit(findChrome() ? 0 : 1)"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Chrome/Chromium not found; e2e tests will be skipped"
+          fi
+      - name: e2e tests
+        if: steps.chrome.outputs.found == 'true'
+        run: node --test test/e2e.test.mjs
+      - name: native client is used (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          npm run build:native
+          os=$(node -p 'process.platform === "darwin" ? "darwin" : "linux"')
+          cpu=$(node -p 'process.arch === "x64" ? "amd64" : "arm64"')
+          test -x "bin/native/mb-$os-$cpu"
+          marker="$RUNNER_TEMP/mb-native-marker.sh"
+          printf '#!/bin/sh\necho NATIVE-HANDOFF\n' > "$marker"
+          chmod +x "$marker"
+          out=$(MONAD_NODE_CLI="$marker" node bin/mb --version)
+          echo "$out"
+          echo "$out" | grep -q NATIVE-HANDOFF
+      - name: Windows package smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $dest = Join-Path $env:RUNNER_TEMP 'mb-pack'
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          npm pack --pack-destination $dest
+          $tgz = Get-ChildItem $dest -Filter 'monad-browser-*.tgz' | Select-Object -First 1
+          if (-not $tgz) { throw 'npm pack produced no tarball' }
+          $entries = tar -tzf $tgz.FullName
+          foreach ($entry in @('package/bin/mb', 'package/scripts/native-name.mjs', 'package/bin/native/mb-linux-amd64')) {
+            if ($entries -notcontains $entry) { throw "tarball is missing $entry" }
+          }
+          # npm 12 does not run install scripts by default; the Node launcher must work alone.
+          npm install -g $tgz.FullName --ignore-scripts
+          $out = mb --version
+          if ($out -ne "monad-browser $version") { throw "unexpected version after --ignore-scripts: $out" }
+          $doctor = mb doctor
+          $doctor
+          if ($doctor -notmatch 'Chrome') { throw 'doctor did not find Chrome/Chromium' }
+          npm install -g $tgz.FullName
+          $out = mb --version
+          if ($out -ne "monad-browser $version") { throw "unexpected version after scripted install: $out" }
 
   native:
     name: native client (Go)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
