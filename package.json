@@ -27,8 +27,8 @@
   ],
   "author": "Batuhan Özköse",
   "bin": {
-    "monad-browser": "./dist/cli.js",
-    "mb": "./bin/mb"
+    "monad-browser": "dist/cli.js",
+    "mb": "bin/mb"
   },
   "files": [
     "dist",
