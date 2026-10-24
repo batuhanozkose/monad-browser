@@ -2,7 +2,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { findChrome } from "../dist/chrome.js";
@@ -358,6 +359,10 @@ test("doctor and skills work without a browser", { skip: false }, () => {
   assert.equal(printed, execFileSync(process.execPath, [cli, "install-skill", "--print"], { env, encoding: "utf8" }));
   const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
   assert.equal(execFileSync(process.execPath, [cli, "--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
+  // npm links a global bin into prefix/bin; the launcher must resolve that symlink.
+  const link = join(mkdtempSync(join(tmpdir(), "mb-bin-")), "mb");
+  symlinkSync(join(here, "..", "bin", "mb"), link);
+  assert.equal(execFileSync(link, ["--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
   // Help must not run the command (mcp would otherwise wait on stdin).
   assert.match(execFileSync(process.execPath, [cli, "mcp", "--help"], { env, encoding: "utf8", timeout: 2000 }), /^usage: mb mcp/);
   assert.match(execFileSync(process.execPath, [cli, "snapshot", "--help"], { env, encoding: "utf8", timeout: 2000 }), /^usage: mb snapshot/);
