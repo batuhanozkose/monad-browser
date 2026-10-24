@@ -379,10 +379,15 @@ test("doctor and skills work without a browser", { skip: false }, () => {
   assert.equal(printed, execFileSync(process.execPath, [cli, "install-skill", "--print"], { env, encoding: "utf8" }));
   const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
   assert.equal(execFileSync(process.execPath, [cli, "--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
-  // npm links a global bin into prefix/bin; the launcher must resolve that symlink.
-  const link = join(mkdtempSync(join(tmpdir(), "mb-bin-")), "mb");
-  symlinkSync(join(here, "..", "bin", "mb"), link);
-  assert.equal(execFileSync(link, ["--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
+  // npm links a global bin into prefix/bin on unix; Windows generates .cmd/.ps1 shims that run
+  // `node bin/mb`, so test that path explicitly there (symlink creation needs extra privileges).
+  const bin = join(here, "..", "bin", "mb");
+  if (process.platform !== "win32") {
+    const link = join(mkdtempSync(join(tmpdir(), "mb-bin-")), "mb");
+    symlinkSync(bin, link);
+    assert.equal(execFileSync(link, ["--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
+  }
+  assert.equal(execFileSync(process.execPath, [bin, "--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
   // Help must not run the command (mcp would otherwise wait on stdin).
   assert.match(execFileSync(process.execPath, [cli, "mcp", "--help"], { env, encoding: "utf8", timeout: 2000 }), /^usage: mb mcp/);
   assert.match(execFileSync(process.execPath, [cli, "snapshot", "--help"], { env, encoding: "utf8", timeout: 2000 }), /^usage: mb snapshot/);

@@ -90,13 +90,13 @@ jobs:
           # npm 12 does not run install scripts by default; the Node launcher must work alone.
           npm install -g $tgz.FullName --ignore-scripts
           $out = mb --version
-          if ($out -ne "monad-browser $version") { throw "unexpected version after --ignore-scripts: $out" }
+          if ($out.Trim() -ne "monad-browser $version") { throw "unexpected version after --ignore-scripts: $out" }
           $doctor = mb doctor
           $doctor
           if ($doctor -notmatch 'Chrome') { throw 'doctor did not find Chrome/Chromium' }
           npm install -g $tgz.FullName
           $out = mb --version
-          if ($out -ne "monad-browser $version") { throw "unexpected version after scripted install: $out" }
+          if ($out.Trim() -ne "monad-browser $version") { throw "unexpected version after scripted install: $out" }
 
   native:
     name: native client (Go)
