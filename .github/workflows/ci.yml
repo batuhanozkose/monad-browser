@@ -91,7 +91,7 @@ jobs:
           npm install -g $tgz.FullName --ignore-scripts
           $out = mb --version
           if ($out.Trim() -ne "monad-browser $version") { throw "unexpected version after --ignore-scripts: $out" }
-          $doctor = mb doctor
+          $doctor = (mb doctor) -join "`n"
           $doctor
           if ($doctor -notmatch 'Chrome') { throw 'doctor did not find Chrome/Chromium' }
           npm install -g $tgz.FullName

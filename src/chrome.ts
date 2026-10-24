@@ -126,7 +126,7 @@ export async function launchChrome(opts: { executable?: string; userDataDir?: st
   const proc = spawn(exe, args, { stdio: ["ignore", "ignore", "pipe"], detached: false, windowsHide: true });
   const wsUrl = await new Promise<string>((resolve, reject) => {
     let buf = "";
-    const timer = setTimeout(() => reject(new Error(`Chrome did not expose DevTools in 20s.\n${buf.slice(-2000)}`)), 20_000);
+    const timer = setTimeout(() => reject(new Error(`Chrome did not expose DevTools in 40s.\n${buf.slice(-2000)}`)), 40_000);
     // A bad MONAD_CHROME (not executable, deleted after discovery) emits "error" instead of "exit";
     // without this listener it would crash the daemon as an unhandled event.
     proc.once("error", (e) => { clearTimeout(timer); reject(e); });

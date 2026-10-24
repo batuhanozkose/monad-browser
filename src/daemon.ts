@@ -52,9 +52,9 @@ async function acquireSession(sock: string, pidFile: string): Promise<boolean> {
       let pid = 0;
       try { pid = Number(readFileSync(pidFile, "utf8").trim()); } catch { /* gone */ }
       if (pidAlive(pid)) {
-        // The owner may still be launching Chrome (its own timeout is 20 s); wait for its socket
+        // The owner may still be launching Chrome (its own timeout is 40 s); wait for its socket
         // before calling it stale, but stop early if it dies.
-        for (let i = 0; i < 250 && pidAlive(pid) && !(await sessionAlive(sock)); i++) await sleep(100);
+        for (let i = 0; i < 550 && pidAlive(pid) && !(await sessionAlive(sock)); i++) await sleep(100);
         if (await sessionAlive(sock)) return false;
       }
       rmSync(pidFile, { force: true }); // stale pid: the daemon is gone

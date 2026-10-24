@@ -33,7 +33,7 @@ export async function startDaemon(session: string, launchArgv: string[]) {
     catch { return ""; }
   };
   await new Promise<void>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`daemon did not start in 30s — see ${logPath}${tail() ? `\n${tail()}` : ""}`)), 30_000);
+    const t = setTimeout(() => reject(new Error(`daemon did not start in 60s — see ${logPath}${tail() ? `\n${tail()}` : ""}`)), 60_000);
     child.once("message", () => { clearTimeout(t); resolve(); });
     child.once("error", (e) => { clearTimeout(t); reject(e); });
     child.once("exit", (code) => {
