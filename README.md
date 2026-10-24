@@ -29,8 +29,11 @@ mb snapshot -i          # interactive elements only, each with an @ref
 mb click @17 -s         # click, then print a fresh (diff) snapshot
 mb fill @3 "hello"
 mb press Enter
+mb read https://example.com/article   # markdown/text without launching Chrome
+mb find role button click --name Submit
+mb get value @3
 mb eval 'return [...document.links].length'
-mb screenshot page.png --full
+mb screenshot page.png --annotate
 mb stop
 ```
 
@@ -73,6 +76,9 @@ Three concepts are doing the work here:
   Chrome DevTools MCP** — at **95–100 % information retention** ([chart](#benchmarks)).
 - **One turn, not twenty calls.** `mb run` executes a whole multi-step plan in a single call and
   returns only what you `log()` or `return`.
+- **Read without a browser.** `mb read` fetches markdown, `llms.txt` docs indexes, or a compact
+  readability pass over HTML — no Chrome, no snapshot. `mb get` and `mb is` answer one targeted
+  question instead of returning the whole page.
 - **Actions that wait.** Every action waits until the target is attached, visible, stable, enabled
   and not covered. If a cookie banner or modal is over it, the error names the cover instead of
   clicking the wrong thing.
@@ -86,10 +92,15 @@ Three concepts are doing the work here:
 
 **Also included**
 
-- Diff snapshots (`snapshot -d`, or `-s` on any action) with an exact Myers line diff.
+- Diff snapshots (`snapshot -d`, or `-s` on any action) with an exact Myers line diff, revisions,
+  `--full` baseline reset, and an optional compact `--json` patch.
 - Same-process **and out-of-process (cross-site) iframes** in the snapshot, with working refs,
   clicks and fills inside them.
 - Sessions (`--session`), saved auth state (`state save/load`), tabs, console capture.
+- Targeted queries (`get`, `is`, `find`), form helpers (`check`, `upload`, `download`, `pdf`,
+  `drag`), and annotated or change-only screenshots.
+- Cookies, localStorage/sessionStorage, request inspection, request routes/aborts, viewport and
+  device emulation, media/offline/header/geo overrides.
 - Optional **snapshot cache** (`mb snapshot --cache`, `--cache-ms N`, `MONAD_SNAPSHOT_CACHE_MS`):
   reuse the last snapshot while the page is unchanged, guarded by a MutationObserver version;
   off by default.
@@ -129,7 +140,8 @@ harness live in **[BENCHMARK.md](BENCHMARK.md)** and [`bench/`](bench/).
 
 monad keeps the same content as agent-browser by default (Wikipedia 47 % → 95 %) at less than half
 the tokens. Interactive-only snapshots fall to **17k** tokens (agent-browser `-i`: 43k), and the
-whole MCP surface loads in **761 schema tokens** versus 3.7k / 5.5k.
+whole MCP surface loads in **~1.3k schema tokens** versus 3.7k / 5.5k (and 12.7k for
+agent-browser's core profile).
 
 ### Whole-task cost
 
@@ -230,6 +242,17 @@ Also `mb run --file plan.js` or pipe a script with `mb run -`.
 Stable refs make the diff exact. `-s` on any action prints only the changed lines, under their
 parent; `mb snapshot -d` does the same on demand.
 
+The baseline is per tab **and option set**: a snapshot taken with `--max-text 20` is never diffed
+against one taken with the default. `--full` returns a full snapshot and resets the baseline;
+`--json` returns a compact machine-applicable form instead of text:
+
+```jsonc
+{"kind":"delta","baseRevision":3,"revision":4,"treeChange":{"startLine":0,"deleteCount":1,"lines":["…"]}}
+```
+
+`diff snapshot [--baseline file]` compares against the last snapshot or a saved file;
+`diff url <a> <b>` compares two pages.
+
 <p align="center"><img src="assets/terminal-diff.svg" alt="diff snapshots for a click and a fill" width="60%"/></p>
 
 ## Targets and auto-wait
@@ -239,8 +262,13 @@ A target can be any of:
 | Form | Example | Notes |
 | --- | --- | --- |
 | Ref | `@12` | from the latest snapshot; stable, self-heals by role + name |
-| Text | `text=Sign in` | visible text match |
+| Text | `text=Sign in` | exact accessible name |
+| Substring | `text~=Sign` | accessible name contains the text |
 | Role | `role=button:Submit` | ARIA role (+ accessible name) |
+| Label | `label=Email` | `<label>` text, then its control |
+| Placeholder | `placeholder=Search` | input placeholder |
+| Alt / title / testid | `alt=Logo`, `title=Help`, `testid=submit` | attribute match |
+| Position | `nth=0:.item`, `nth=-1:.item` | first / last match for a CSS selector |
 | CSS | `#email` | standard CSS selector |
 
 Selectors resolve in the **top document**. To act inside an iframe, take a snapshot and use the
@@ -252,25 +280,38 @@ frames. Actions auto-wait until the element is actionable; a covering element is
 | Command | What it does |
 | --- | --- |
 | `open <url> [-s] [-i]` | navigate the current tab (alias `goto`, `navigate`) |
-| `snapshot [-i] [-d] [--max-lines N]` | accessibility snapshot with `@N` refs (`-i` interactive only, `-d` only changes) |
-| `click <target> [--button right] [--count 2] [-s]` | click, auto-waiting |
+| `snapshot [-i] [-d] [--full] [--json] [--max-lines N]` | accessibility snapshot with `@N` refs (`-i` interactive only, `-d` only changes) |
+| `click <target> [--button right] [--count 2] [--new-tab] [-s]` | click, auto-waiting |
 | `fill <target> <text> [--submit] [-s]` | clear and type; `--submit` presses Enter |
-| `type <text> [--into @ref]` | insert text into the focused element |
-| `press <key>` | `Enter`, `Tab`, `Escape`, `Control+a`, `Shift+Tab`, … |
-| `select <target> <value...>` | choose `<select>` option(s) by value or label |
-| `hover` · `scroll [dir] [px] [--on @ref]` | pointer / viewport |
+| `type <text> [--into @ref]` · `keyboard type\|inserttext <text>` | insert text / real keystrokes |
+| `press <key>` · `keydown <key>` · `keyup <key>` | `Enter`, `Tab`, `Escape`, `Control+a`, … |
+| `select <target> <value...>` · `check` · `uncheck` | choose options / toggle checkboxes |
+| `hover` · `scroll [dir] [px] [--on @ref]` · `scrollintoview <target>` | pointer / viewport |
+| `drag <src> <dst>` · `focus <target>` · `highlight <target>` | drag / focus / outline |
+| `upload <target> <file...>` · `download <target> [dir]` · `pdf [path]` | files and print |
+| `mouse move\|down\|up\|wheel …` | raw pointer events |
 | `eval <js>` | evaluate in the page (top-level `await`/`return` allowed) |
+| `get <text\|html\|value\|attr\|title\|url\|count\|box\|styles> …` | one targeted value |
+| `is <visible\|enabled\|checked> <target>` | state question |
+| `find <role\|text\|label\|placeholder\|alt\|title\|testid\|first\|last\|nth> …` | semantic locator + action |
 | `text [target] [--max N]` | visible text of the page or an element |
-| `screenshot [path] [--full] [--on @ref] [--jpeg]` | PNG/JPEG of the viewport or full page |
+| `read [url] [--outline] [--filter T] [--raw] [--require-md]` | markdown/text; URL reads do not launch Chrome |
+| `screenshot [path] [--full] [--on @ref] [--jpeg] [--annotate] [--if-changed]` | image of the viewport/page/element |
+| `diff snapshot [--baseline file]` · `diff url <a> <b>` | compare states or pages |
 | `back` · `forward` · `reload` | history & reload |
-| `wait <ms\|selector\|--idle\|--text T>` | time, element, network idle, or text |
+| `wait <ms\|selector\|--idle\|--text T\|--url GLOB\|--fn JS\|--state hidden>` | wait for a condition |
+| `cookies [get\|set\|clear]` · `storage local\|session` | cookie and web-storage control |
+| `network requests\|clear\|route\|unroute\|har` | inspect, mock, or export requests |
+| `set viewport\|device\|media\|offline\|headers\|geo` | emulation and network conditions |
+| `dialog status\|accept\|dismiss` | handle dialogs when `--no-auto-dialog` is set |
 | `state save <file>` · `state load <file>` | cookies + storage (log in once, reuse everywhere) |
 | `tabs` · `tab <n> \| tab new [url] \| tab close [n]` | tab management |
-| `console` | recent page errors/warnings |
+| `console` · `profiler start\|stop` · `trace start\|stop` | page errors/warnings · CPU profile · DevTools trace |
 | `block <image,font,media,stylesheet\|none>` | block resource types for new tabs |
 | `url` · `cdp <Domain.method> [json]` | current title/url · raw CDP on the current tab |
 | `run '<js>' \| run --file f.js \| run -` | one-turn multi-step plan |
 | `mcp` | run as an MCP server over stdio |
+| `doctor [--fix]` · `skills list\|get\|path` | diagnostics · version-matched agent skills |
 | `install-skill [--project \| --dir D \| --print]` | write `SKILL.md` for coding agents |
 | `start` · `stop [--all]` · `status` · `sessions` | daemon lifecycle |
 
@@ -282,13 +323,21 @@ mb --headful open x.com           # visible window
 mb --cdp 9222 open x.com          # attach to an existing Chrome
 mb --profile ./chrome-data open x.com   # persistent profile
 mb --block image,font open x.com  # block resources
+mb --headers '{"Authorization":"Bearer …"}' open x.com
+mb --viewport 390x844 open x.com  # mobile layout
+mb --no-auto-dialog open x.com    # inspect dialogs before accepting
 ```
+
+`monad-browser.json` (project) and `~/.monad-browser/config.json` (user) hold defaults such as
+`chrome`, `headful`, `idleMinutes`, `block`, `proxy`, `headers`, `viewport`, `downloadPath`, and
+`screenshotDir`; `--config <path>` selects another file. CLI flags and environment variables win.
 
 ## MCP server
 
-`mb mcp` speaks MCP over stdio and forwards to the **same warm browser** the CLI uses. Ten lean
-tools: `browser_run`, `browser_open`, `browser_snapshot`, `browser_click`, `browser_fill`,
-`browser_press`, `browser_select`, `browser_text`, `browser_screenshot`, `browser_command`.
+`mb mcp` speaks MCP over stdio and forwards to the **same warm browser** the CLI uses. Fourteen lean
+tools: `browser_run`, `browser_open`, `browser_snapshot`, `browser_read`, `browser_get`,
+`browser_find`, `browser_check`, `browser_click`, `browser_fill`, `browser_press`,
+`browser_select`, `browser_text`, `browser_screenshot`, `browser_command`.
 
 ```sh
 claude mcp add monad-browser -- mb mcp
@@ -299,13 +348,14 @@ claude mcp add monad-browser -- mb mcp
 { "mcpServers": { "monad-browser": { "command": "mb", "args": ["mcp"] } } }
 ```
 
-The whole schema costs ~761 tokens loaded into every request — 4.9×–7.2× less than the Playwright
-and Chrome DevTools MCP servers.
+The whole schema costs ~1.3k tokens loaded into every request — 2.9×–4.3× less than the Playwright
+and Chrome DevTools MCP servers, and ~10× less than agent-browser's core profile (12.7k).
 
 ## Agent skill
 
 `mb install-skill` writes a `SKILL.md` teaching a coding agent (Claude Code, Codex, OpenCode, …) to
-use the CLI well.
+use the CLI well. `mb skills get core` prints the same, version-matched text without writing files;
+`mb skills path` shows where it installs.
 
 ```sh
 mb install-skill              # ~/.claude/skills + ~/.agents/skills
@@ -325,6 +375,13 @@ mb install-skill --print      # stdout
 | `MONAD_SESSION` | `default` | session name when `--session` is not given |
 | `MONAD_PRE_ACTION_QUIET_MS` | `500` | hydration grace before an action; set `0` on very chatty pages |
 | `MONAD_SNAPSHOT_CACHE_MS` | `0` | reuse a snapshot for this long while the page is unchanged (off) |
+| `MONAD_ACTION_TIMEOUT` | `5000` | default auto-wait budget per action (ms) |
+| `MONAD_HEADFUL` | – | set to `1` for a visible window |
+| `MONAD_PROXY` | – | proxy URL (credentials supported) |
+| `MONAD_SCREENSHOT_DIR` | cwd | default output directory for screenshots |
+| `MONAD_SCREENSHOT_FORMAT` | `png` | `png` or `jpeg` |
+| `MONAD_SCREENSHOT_QUALITY` | `70` | JPEG quality |
+| `MONAD_DOWNLOAD_PATH` | `downloads` | default directory for `mb download` |
 
 ## Screenshots
 
@@ -349,6 +406,12 @@ A page opened and captured with `mb open` + `mb screenshot`:
 - **`run` scripts are trusted, not sandboxed.** See the note above.
 - **Snapshot cost scales with page size.** The accessibility tree and layout are rebuilt on every
   snapshot (Wikipedia ≈ 0.9 s). Prefer `-i` and diff snapshots on large pages.
+- **`screenshot --annotate` is viewport/element only.** Full-page annotation is not supported yet.
+- **`read` HTML fallback is heuristic.** Markdown and `llms.txt` are exact; HTML is stripped with a
+  small readability pass. Use `--outline`/`--filter`, or a snapshot, when structure matters.
+- **`diff` covers snapshots and URLs, not pixels.** `diff screenshot` is not implemented.
+- **`set device` ships a small preset table** (Desktop, iPhone 15/SE, Pixel 7, iPad); use
+  `set viewport` for anything else.
 - **Windows** works, but without the native thin client (Node start-up per command).
 
 ## Development
@@ -367,9 +430,11 @@ client ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark har
 
 ## Status & roadmap
 
-**Alpha.** Done: daemon, CDP core, snapshot (incl. iframes), `run`, auto-wait, diff snapshots,
-sessions/auth state, MCP server, agent skill, benchmarks. Next: Docker / E2B packaging, published
-npm package, a Windows native client.
+**Alpha.** Done: daemon, CDP core, snapshot (incl. iframes), `run`, auto-wait, diff snapshots with
+revisions/JSON patches, `read`, targeted queries and semantic locators, form/file actions,
+annotated/change-only screenshots, cookies/storage/network, emulation, config/doctor/skills, MCP
+server, benchmarks. Next: Docker / E2B packaging, published npm package, a Windows native client,
+pixel screenshot diffs.
 
 ## License
 

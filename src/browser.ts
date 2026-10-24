@@ -1,8 +1,11 @@
 // Browser session: one CDP connection, a current tab, refs, and the action primitives.
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { CDP } from "./cdp.js";
 import { launchChrome, resolveCdpEndpoint, cleanupProfile, type LaunchedChrome } from "./chrome.js";
-import { renderDiff } from "./diff.js";
-import { takeSnapshot, newRefTable, elKey, type El, type RefTable, type SnapshotOptions } from "./snapshot.js";
+import { renderDiff, treeChange, matchGlob, type TreeChange } from "./diff.js";
+import { takeSnapshot, newRefTable, elKey, DEFAULT_MAX_LINES, type El, type RefTable, type SnapshotOptions } from "./snapshot.js";
 import { KEYS, modifierBit } from "./keys.js";
 
 /**
@@ -31,21 +34,61 @@ export type BrowserOptions = {
   cdpEndpoint?: string; executable?: string; userDataDir?: string; headful?: boolean;
   block?: string[]; // resource types to block: image, font, media, stylesheet
   proxy?: string;
+  headers?: Record<string, string>; // extra HTTP headers for every request
+  userAgent?: string;
+  ignoreHttpsErrors?: boolean;
+  initScripts?: string[]; // page JS run before the first navigation, on every document
+  downloadPath?: string; // default directory for `download`
+  colorScheme?: "dark" | "light" | "no-preference";
+  viewport?: { width: number; height: number; scale?: number };
+  autoDialog?: boolean; // accept alert/confirm/prompt automatically (default true)
+  extraArgs?: string[];
 };
 
 /** A searchable document: a session, plus a frameId for same-process child frames, plus its <iframe> owner chain. */
 type DocRef = { sid: string; frameId?: string; owner?: El };
 
+/** One request seen by Network.*; kept compact because `network requests` is a debugging surface. */
+export type NetRequest = {
+  id: string; url: string; method: string; type: string; ts: number;
+  status?: number; mime?: string; size?: number; failed?: string;
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+};
+
+/** A Fetch-domain route: abort or fulfill matching requests. */
+export type Route = {
+  pattern: string; abort?: boolean; body?: string; status?: number;
+  contentType?: string; resourceTypes?: string[];
+};
+
 type Tab = {
   targetId: string; sessionId: string; refs: RefTable; inflight: Map<string, number>; lastNet: number; url: string; title: string;
   mainFrame?: string; navAt: number; loadAt: number; fullLoadAt: number;
   oopifs: Map<string, string>; // out-of-process iframe frameId → its CDP session
-  last?: { key: string; lines: string[] };
+  last?: { key: string; lines: string[]; rev: number };
+  rev: number; // snapshot revision for this tab
+  lastShotHash?: string;
+  requests: Map<string, NetRequest>;
+  routes: Route[];
+  fetchEnabled: boolean; // Fetch domain is enabled only while block types or routes exist
   storageScripts: string[]; // Page.addScriptToEvaluateOnNewDocument ids from state load, so a reload can replace them
   cache?: { at: number; version: string; sig: string; text: string }; // last snapshot + the page version it was taken at
 };
 
 const RESOURCE_TYPES: Record<string, string> = { image: "Image", font: "Font", media: "Media", stylesheet: "Stylesheet", css: "Stylesheet" };
+
+const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const PIXEL_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36";
+
+/** A small, dependency-free device table for screenshots and responsive checks. */
+const DEVICES: Record<string, { width: number; height: number; scale: number; mobile: boolean; userAgent?: string }> = {
+  desktop: { width: 1280, height: 800, scale: 1, mobile: false },
+  "iphone 15": { width: 393, height: 852, scale: 3, mobile: true, userAgent: IPHONE_UA },
+  "iphone se": { width: 375, height: 667, scale: 2, mobile: true, userAgent: IPHONE_UA },
+  "pixel 7": { width: 412, height: 915, scale: 2.625, mobile: true, userAgent: PIXEL_UA },
+  ipad: { width: 820, height: 1180, scale: 2, mobile: true, userAgent: IPHONE_UA },
+};
 
 const STALE_MS = 2000;
 const DOM_TYPES = new Set(["Document", "Script", "XHR", "Fetch", "Stylesheet"]);
@@ -70,20 +113,32 @@ export class Browser {
   current?: Tab;
   private blockTypes: string[] = [];
   private dialogs: string[] = [];
+  pendingDialog?: { type: string; message: string; defaultPrompt?: string; sessionId: string };
+  private mouseAt = { x: 0, y: 0 };
+  private traceActive = false;
   console: string[] = [];
   actionTimeout = Number(process.env.MONAD_ACTION_TIMEOUT ?? 5000);
 
   constructor(private opts: BrowserOptions = {}) {}
 
+  get defaultDownloadPath() { return this.opts.downloadPath; }
+  cdpUrl() { return this.chrome?.wsUrl ?? this.opts.cdpEndpoint ?? ""; }
+  lastSnapshotMeta() { const last = this.tab().last; return last ? { lines: last.lines, key: last.key, rev: last.rev } : undefined; }
+
   async start() {
     let ws: string;
     if (this.opts.cdpEndpoint) ws = await resolveCdpEndpoint(this.opts.cdpEndpoint);
     else {
-      this.chrome = await launchChrome({ executable: this.opts.executable, userDataDir: this.opts.userDataDir, headful: this.opts.headful, proxy: this.opts.proxy });
+      this.chrome = await launchChrome({
+        executable: this.opts.executable, userDataDir: this.opts.userDataDir, headful: this.opts.headful,
+        proxy: this.opts.proxy, extraArgs: this.opts.extraArgs,
+      });
       ws = this.chrome.wsUrl;
     }
     this.cdp = await CDP.connect(ws);
     this.setBlock(this.opts.block ?? []);
+    if (this.opts.downloadPath)
+      await this.cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: this.opts.downloadPath, eventsEnabled: true }).catch(() => {});
     await this.cdp.send("Target.setDiscoverTargets", { discover: true });
     this.cdp.on("Target.targetDestroyed", ({ targetId }) => {
       this.tabs.delete(targetId);
@@ -108,18 +163,32 @@ export class Browser {
     this.blockTypes = types.map((t) => RESOURCE_TYPES[t.toLowerCase()] ?? t).filter(Boolean);
   }
 
-  /** Fetch domain only when needed: resource blocking and/or proxy auth. Otherwise requests never pause. */
-  private fetchSetup(sessionId: string) {
-    const patterns = this.blockTypes.map((resourceType) => ({ resourceType, requestStage: "Request" }));
-    if (!patterns.length) return Promise.resolve();
-    return this.cdp.send("Fetch.enable", { patterns }, sessionId);
+  /** Fetch domain only when needed: resource blocking and/or a network route. Otherwise requests never pause. */
+  private fetchPatterns(tab: Tab) {
+    const patterns: any[] = this.blockTypes.map((resourceType) => ({ resourceType, requestStage: "Request" }));
+    for (const r of tab.routes) patterns.push({ urlPattern: r.pattern || "*", requestStage: "Request" });
+    return patterns;
+  }
+
+  private async refreshFetch(tab: Tab) {
+    const patterns = this.fetchPatterns(tab);
+    if (patterns.length) {
+      await this.cdp.send("Fetch.enable", { patterns }, tab.sessionId).catch(() => {});
+      tab.fetchEnabled = true;
+    } else if (tab.fetchEnabled) {
+      await this.cdp.send("Fetch.disable", {}, tab.sessionId).catch(() => {});
+      tab.fetchEnabled = false;
+    }
   }
 
   private async attach(targetId: string): Promise<Tab> {
     const existing = this.tabs.get(targetId);
     if (existing) return existing;
     const { sessionId } = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
-    const tab: Tab = { targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "", navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map(), storageScripts: [] };
+    const tab: Tab = {
+      targetId, sessionId, refs: newRefTable(), inflight: new Map(), lastNet: Date.now(), url: "", title: "",
+      navAt: 0, loadAt: 0, fullLoadAt: 0, oopifs: new Map(), rev: 0, requests: new Map(), routes: [], fetchEnabled: false, storageScripts: [],
+    };
     this.tabs.set(targetId, tab);
     const s = sessionId;
     const on = (ev: string, fn: (p: any) => void) => this.cdp.on(ev, (p, sid) => { if (sid === s) fn(p); });
@@ -130,10 +199,27 @@ export class Browser {
       // Only loads that can still change the DOM gate settling; images, fonts, media and beacons do not.
       if (DOM_TYPES.has(p.type)) tab.inflight.set(p.requestId, now);
       if (DOM_TYPES.has(p.type)) tab.lastNet = now;
+      tab.requests.set(p.requestId, {
+        id: p.requestId, url: p.request.url, method: p.request.method, type: p.type, ts: now,
+        requestHeaders: p.request.headers,
+      });
+      if (tab.requests.size > 500) { const oldest = tab.requests.keys().next().value; if (oldest) tab.requests.delete(oldest); }
     });
-    const done = (p: any) => { if (tab.inflight.delete(p.requestId)) tab.lastNet = Date.now(); };
+    on("Network.responseReceived", (p) => {
+      const r = tab.requests.get(p.requestId);
+      if (r) { r.status = p.response.status; r.mime = p.response.mimeType; r.responseHeaders = p.response.headers; }
+    });
+    const done = (p: any) => {
+      if (tab.inflight.delete(p.requestId)) tab.lastNet = Date.now();
+      const r = tab.requests.get(p.requestId);
+      if (r && typeof p.encodedDataLength === "number") r.size = p.encodedDataLength;
+    };
     on("Network.loadingFinished", done);
-    on("Network.loadingFailed", done);
+    on("Network.loadingFailed", (p) => {
+      done(p);
+      const r = tab.requests.get(p.requestId);
+      if (r) r.failed = p.errorText ?? "failed";
+    });
     on("Page.frameNavigated", (p) => { if (!p.frame.parentId) { tab.url = p.frame.url; tab.mainFrame = p.frame.id; } });
     on("Page.frameRequestedNavigation", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
     on("Page.frameStartedLoading", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.navAt = Date.now(); });
@@ -145,8 +231,13 @@ export class Browser {
     });
     on("Page.navigatedWithinDocument", (p) => { if (!tab.mainFrame || p.frameId === tab.mainFrame) tab.url = p.url; });
     on("Page.javascriptDialogOpening", async (p) => {
-      this.dialogs.push(`${p.type}: ${p.message}`);
       // Never let a dialog wedge the agent: accept by default (prompt gets its default text).
+      // `--no-auto-dialog` leaves it open so the agent can inspect and answer it.
+      if (this.opts.autoDialog === false) {
+        this.pendingDialog = { type: p.type, message: p.message, defaultPrompt: p.defaultPrompt, sessionId: s };
+        return;
+      }
+      this.dialogs.push(`${p.type}: ${p.message}`);
       try { await this.cdp.send("Page.handleJavaScriptDialog", { accept: true, promptText: p.defaultPrompt ?? "" }, s); } catch { /* gone */ }
     });
     on("Runtime.consoleAPICalled", (p) => {
@@ -158,6 +249,21 @@ export class Browser {
     });
     on("Runtime.exceptionThrown", (p) => { this.console.push(`exception: ${p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text}`.slice(0, 300)); });
     on("Fetch.requestPaused", (p) => {
+      const route = [...tab.routes].reverse().find((r) =>
+        matchGlob(p.request.url, r.pattern) && (!r.resourceTypes?.length || r.resourceTypes.includes(p.resourceType)));
+      if (route?.abort) {
+        this.cdp.send("Fetch.failRequest", { requestId: p.requestId, errorReason: "Aborted" }, s).catch(() => {});
+        return;
+      }
+      if (route && route.body !== undefined) {
+        this.cdp.send("Fetch.fulfillRequest", {
+          requestId: p.requestId,
+          responseCode: route.status ?? 200,
+          responseHeaders: [{ name: "Content-Type", value: route.contentType ?? "application/json" }],
+          body: Buffer.from(route.body, "utf8").toString("base64"),
+        }, s).catch(() => {});
+        return;
+      }
       const block = this.blockTypes.includes(p.resourceType);
       const cmd = block ? this.cdp.send("Fetch.failRequest", { requestId: p.requestId, errorReason: "BlockedByClient" }, s)
                         : this.cdp.send("Fetch.continueRequest", { requestId: p.requestId }, s);
@@ -172,12 +278,39 @@ export class Browser {
       this.cdp.send("DOM.enable", {}, s),
       this.cdp.send("Accessibility.enable", {}, s),
       this.cdp.send("Page.setLifecycleEventsEnabled", { enabled: true }, s),
-      this.fetchSetup(s),
+      this.refreshFetch(tab),
     ]);
     await this.cdp.send("Runtime.runIfWaitingForDebugger", {}, s).catch(() => {});
     const { targetInfo } = await this.cdp.send("Target.getTargetInfo", { targetId });
     tab.url = targetInfo.url; tab.title = targetInfo.title;
+    await this.applyTabOptions(tab);
     return tab;
+  }
+
+  /** Apply session-wide options that CDP scopes to one page session. */
+  private async applyTabOptions(tab: Tab) {
+    const s = tab.sessionId;
+    if (this.opts.headers && Object.keys(this.opts.headers).length)
+      await this.cdp.send("Network.setExtraHTTPHeaders", { headers: this.opts.headers }, s).catch(() => {});
+    if (this.opts.userAgent)
+      await this.cdp.send("Network.setUserAgentOverride", { userAgent: this.opts.userAgent }, s).catch(() => {});
+    if (this.opts.ignoreHttpsErrors)
+      await this.cdp.send("Security.setIgnoreCertificateErrors", { ignore: true }, s).catch(() => {});
+    if (this.opts.colorScheme && this.opts.colorScheme !== "no-preference")
+      await this.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: this.opts.colorScheme }] }, s).catch(() => {});
+    if (this.opts.viewport) {
+      // `setViewport` targets the current tab; during attach the new tab is not current yet.
+      await this.cdp.send("Emulation.setDeviceMetricsOverride", {
+        width: this.opts.viewport.width, height: this.opts.viewport.height,
+        deviceScaleFactor: this.opts.viewport.scale ?? 1, mobile: false,
+      }, s).catch(() => {});
+    }
+    for (const file of this.opts.initScripts ?? []) {
+      try {
+        const { readFileSync } = await import("node:fs");
+        await this.cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: readFileSync(file, "utf8") }, s);
+      } catch { /* missing init script is reported by the launcher, not fatal here */ }
+    }
   }
 
   /** Cross-origin iframes live in their own renderer: attach to each (recursively) so snapshots and refs reach inside. */
@@ -256,6 +389,9 @@ export class Browser {
   }
 
   async info() {
+    // A renderer paused on alert/confirm/prompt cannot evaluate JS; the event-maintained
+    // tab fields are still current, so callers (click, wait, snapshots) do not block.
+    if (this.pendingDialog) return { url: this.tab().url, title: this.tab().title };
     const r = await this.evaluate("({url: location.href, title: document.title})");
     return r as { url: string; title: string };
   }
@@ -307,11 +443,16 @@ export class Browser {
     return { cookies: state.cookies?.length ?? 0, origins: state.origins?.length ?? 0, applied };
   }
 
-  /** Snapshot; with `diff`, only lines that changed since this tab's previous snapshot of the same page. */
-  async snapshot(opts: SnapshotOptions & { diff?: boolean; cacheMs?: number } = {}) {
+  /**
+   * Snapshot; with `diff`, only lines that changed since this tab's previous snapshot of the same
+   * page and option set. `full` forces a full snapshot and resets the baseline; `json` returns the
+   * compact machine-applicable form (`full` | `unchanged` | `delta` + revision).
+   */
+  async snapshot(opts: SnapshotOptions & { diff?: boolean; full?: boolean; json?: boolean; cacheMs?: number } = {}) {
     const tab = this.tab();
-    const ttl = opts.diff ? 0 : opts.cacheMs ?? snapshotCacheMs();
-    const sig = JSON.stringify([!!opts.interactive, opts.maxText ?? null, opts.maxLines ?? null, opts.compact ?? null, opts.maxInline ?? null, opts.maxProse ?? null]);
+    if (this.pendingDialog) return `dialog pending: ${this.pendingDialog.type}: ${this.pendingDialog.message} — use mb dialog accept|dismiss`;
+    const ttl = opts.diff || opts.json || opts.full ? 0 : opts.cacheMs ?? snapshotCacheMs();
+    const sig = JSON.stringify([!!opts.interactive, opts.maxText ?? 80, opts.maxLines ?? DEFAULT_MAX_LINES, opts.compact ?? null, opts.maxInline ?? null, opts.maxProse ?? null]);
     // Serve the last snapshot when the page version is unchanged; the MutationObserver has already seen
     // every prior mutation by the time this command runs, so an unchanged version means an unchanged page.
     if (ttl > 0 && tab.cache && tab.cache.sig === sig && !this.dialogs.length && Date.now() - tab.cache.at < ttl) {
@@ -323,22 +464,47 @@ export class Browser {
     const extra: string[] = [];
     if (this.dialogs.length) extra.push(`dialogs: ${this.dialogs.splice(0).join(" | ")}`);
     const head = `# ${title} — ${url}\n${extra.length ? extra.join("\n") + "\n" : ""}`;
-    const key = `${url}|${opts.interactive ? "i" : "f"}`;
+    // Every option that changes the rendered tree belongs in the key: a snapshot taken with
+    // --max-text 20 is not a baseline for one taken with the default.
+    const key = JSON.stringify([
+      url, !!opts.interactive, opts.maxText ?? 80, opts.maxLines ?? DEFAULT_MAX_LINES,
+      opts.compact ?? null, opts.maxInline ?? null, opts.maxProse ?? null,
+    ]);
     const lines = res.text.split("\n");
-    const prev = tab.last?.key === key ? tab.last.lines : undefined;
-    tab.last = { key, lines };
+    const prev = !opts.full && tab.last?.key === key ? tab.last : undefined;
+    const rev = ++tab.rev;
+    tab.last = { key, lines, rev };
     if (opts.diff && prev) {
-      const d = renderDiff(prev, lines);
-      if (!d.added && !d.removed) return `${head}(no changes since last snapshot)`;
-      if (d.text.length < res.text.length * 0.7)
-        return `${head}(diff vs last snapshot: +${d.added} -${d.removed}, ${d.same} unchanged)\n${d.text}`;
+      const d = renderDiff(prev.lines, lines);
+      if (!d.added && !d.removed) {
+        if (opts.json) return JSON.stringify({ kind: "unchanged", revision: rev });
+        return `unchanged rev ${rev}${extra.length ? `\n${extra.join("\n")}` : ""}`;
+      }
+      if (d.text.length < res.text.length * 0.7) {
+        if (opts.json) {
+          const change: TreeChange = treeChange(prev.lines, lines);
+          const delta = JSON.stringify({ kind: "delta", baseRevision: prev.rev, revision: rev, treeChange: change });
+          // The splice is contiguous, so two distant edits can be much larger than the Myers
+          // text diff. Fall back to a full tree when the patch would not save space.
+          if (delta.length < res.text.length * 0.7) return delta;
+        } else {
+          return `${head}(diff rev ${prev.rev}→${rev}: +${d.added} -${d.removed}, ${d.same} unchanged)\n${d.text}`;
+        }
+      }
     }
+    if (opts.json) return JSON.stringify({ kind: "full", revision: rev, tree: res.text });
     const out = head + res.text;
     if (ttl > 0) {
       const version = await this.docVersion();
       if (version !== undefined) tab.cache = { at: Date.now(), version, sig, text: out };
     }
     return out;
+  }
+
+  /** Raw snapshot text with no header or diff bookkeeping (used by `diff url` and baseline diffs). */
+  async snapshotText(opts: SnapshotOptions = {}): Promise<string> {
+    const tab = this.tab();
+    return (await takeSnapshot(this.cdp, tab.sessionId, tab.refs, opts, tab.oopifs)).text;
   }
 
   /** Cheap page fingerprint: the URL plus a MutationObserver counter installed once per document. */
@@ -390,6 +556,18 @@ export class Browser {
     // Name/role/CSS targets search the top document first (the common case, no frame discovery),
     // then every same-process and out-of-process frame.
     const topDoc: DocRef = { sid: tab.sessionId };
+    const loc = /^(label|placeholder|alt|title|testid|nth)=([\s\S]+)$/.exec(t);
+    if (loc) {
+      const hit = await this.findByLocator(loc[1], loc[2], topDoc);
+      if (!hit) throw new Error(`no element matches ${loc[1]}=${loc[2]}`);
+      return hit;
+    }
+    if (t.startsWith("text~=")) {
+      const name = t.slice(6);
+      const hit = await this.findInFrames(name, undefined, topDoc, true);
+      if (!hit) throw new Error(`no element containing "${name}"`);
+      return hit;
+    }
     if (t.startsWith("text=")) {
       const name = t.slice(5);
       const hit = await this.findInFrames(name, undefined, topDoc);
@@ -415,13 +593,52 @@ export class Browser {
   private elFor(bid: number, d: DocRef): El { return { sid: d.sid, bid, owner: d.owner }; }
 
   /** Query the top document, then fall back to every frame document. */
-  private async findInFrames(name: string | undefined, role: string | undefined, topDoc: DocRef): Promise<El | undefined> {
-    const topIds = await this.queryAX(name, role, topDoc);
+  private async findInFrames(name: string | undefined, role: string | undefined, topDoc: DocRef, fuzzy = false): Promise<El | undefined> {
+    const topIds = await this.queryAX(name, role, topDoc, fuzzy);
     if (topIds.length) return this.elFor(topIds[0], topDoc);
     for (const d of await this.frameDocs()) {
       if (d.sid === topDoc.sid && d.frameId === undefined) continue; // already tried
-      const ids = await this.queryAX(name, role, d);
+      const ids = await this.queryAX(name, role, d, fuzzy);
       if (ids.length) return this.elFor(ids[0], d);
+    }
+    return undefined;
+  }
+
+  /** `label=`, `placeholder=`, `alt=`, `title=`, `testid=` and `nth=N:selector` targets, across frames. */
+  private async findByLocator(kind: string, value: string, topDoc: DocRef): Promise<El | undefined> {
+    let expr: string;
+    if (kind === "nth") {
+      const m = /^(-?\d+):([\s\S]+)$/.exec(value);
+      if (!m) throw new Error(`usage: nth=<index>:<css selector>`);
+      const n = Number(m[1]);
+      const index = n < 0 ? `a.length + (${n})` : String(n);
+      expr = `(() => { const a = document.querySelectorAll(${JSON.stringify(m[2])}); return a[${index}] ?? null; })()`;
+    } else if (kind === "label") {
+      expr = `(() => {
+        const v = ${JSON.stringify(value)};
+        const norm = (e) => (e.textContent || '').replace(/\\s+/g, ' ').trim();
+        const all = [...document.querySelectorAll('label')];
+        const hit = all.find(e => norm(e) === v) || all.find(e => norm(e).includes(v));
+        if (!hit) return null;
+        if (hit.control) return hit.control;
+        if (hit.htmlFor) return document.getElementById(hit.htmlFor) || hit;
+        return hit.querySelector('input,select,textarea,button') || hit;
+      })()`;
+    } else {
+      const attr = kind === "testid" ? "data-testid" : kind;
+      expr = `(() => {
+        const v = ${JSON.stringify(value)};
+        const all = [...document.querySelectorAll(${JSON.stringify("[" + attr + "]")})];
+        const hit = all.find(e => e.getAttribute(${JSON.stringify(attr)}) === v) || all.find(e => (e.getAttribute(${JSON.stringify(attr)}) || '').includes(v));
+        if (!hit) return null;
+        return hit;
+      })()`;
+    }
+    const docs = [topDoc, ...(await this.frameDocs())];
+    for (const d of docs) {
+      if (d.sid === topDoc.sid && d.frameId === undefined && d !== topDoc) continue;
+      const bid = await this.queryExpr(expr, d);
+      if (bid !== undefined) return this.elFor(bid, d);
     }
     return undefined;
   }
@@ -489,16 +706,18 @@ export class Browser {
     } catch { return false; }
   }
 
-  /** Accessible-name (+ role) lookup in one document, visible nodes first. */
-  private async queryAX(name?: string, role?: string, doc: DocRef = { sid: this.tab().sessionId }): Promise<number[]> {
+  /** Accessible-name (+ role) lookup in one document, visible nodes first. `fuzzy` matches substrings. */
+  private async queryAX(name?: string, role?: string, doc: DocRef = { sid: this.tab().sessionId }, fuzzy = false): Promise<number[]> {
     let nodes: any[];
-    if (doc.frameId) {
+    if (doc.frameId || fuzzy) {
       // queryAXTree cannot be scoped to a frame; getFullAXTree can, so fetch and filter locally.
-      const r = await this.cdp.send<any>("Accessibility.getFullAXTree", { frameId: doc.frameId }, doc.sid);
+      const r = await this.cdp.send<any>("Accessibility.getFullAXTree", doc.frameId ? { frameId: doc.frameId } : {}, doc.sid);
       const want = name === undefined ? undefined : normText(name);
-      nodes = (r.nodes ?? []).filter((n: any) =>
-        (role === undefined || (n.role?.value ?? "").toLowerCase() === role.toLowerCase()) &&
-        (want === undefined || normText(n.name?.value) === want));
+      nodes = (r.nodes ?? []).filter((n: any) => {
+        const got = normText(n.name?.value);
+        return (role === undefined || (n.role?.value ?? "").toLowerCase() === role.toLowerCase()) &&
+          (want === undefined || (fuzzy ? got.toLowerCase().includes(want.toLowerCase()) : got === want));
+      });
     } else {
       const params: any = {};
       const { root } = await this.cdp.send<any>("DOM.getDocument", { depth: 0 }, doc.sid);
@@ -518,15 +737,15 @@ export class Browser {
     return visible.length ? visible : ids;
   }
 
-  /** `document.querySelector` in one document, returned as a backendNodeId (same-process frames run in an isolated world). */
-  private async queryCss(selector: string, doc: DocRef): Promise<number | undefined> {
+  /** Evaluate an expression that returns an element, and return its backendNodeId (isolated world for frames). */
+  private async queryExpr(expr: string, doc: DocRef): Promise<number | undefined> {
     let contextId: number | undefined;
     if (doc.frameId) {
       const w = await this.cdp.send<any>("Page.createIsolatedWorld", { frameId: doc.frameId, worldName: "monad-resolve" }, doc.sid).catch(() => null);
       contextId = w?.executionContextId;
       if (!contextId) return undefined;
     }
-    const r: any = await this.cdp.send<any>("Runtime.evaluate", { expression: `document.querySelector(${JSON.stringify(selector)})`, contextId, returnByValue: false }, doc.sid).catch(() => null);
+    const r: any = await this.cdp.send<any>("Runtime.evaluate", { expression: expr, contextId, returnByValue: false }, doc.sid).catch(() => null);
     const objectId = r?.result?.objectId;
     if (!objectId) return undefined;
     try {
@@ -535,6 +754,24 @@ export class Browser {
       return node?.backendNodeId;
     } catch { return undefined; }
     finally { this.cdp.send("Runtime.releaseObject", { objectId }, doc.sid).catch(() => {}); }
+  }
+
+  /** `document.querySelector` in one document, returned as a backendNodeId. */
+  private queryCss(selector: string, doc: DocRef): Promise<number | undefined> {
+    return this.queryExpr(`document.querySelector(${JSON.stringify(selector)})`, doc);
+  }
+
+  /**
+   * Input events can block their CDP response while a JavaScript dialog is open (the renderer is
+   * paused). A short timeout keeps a dialog from wedging the command; the event itself was
+   * delivered, and `dialog status`/`accept` can proceed.
+   */
+  private async sendInput(method: string, params: any, timeoutMs = 2000) {
+    try { await this.cdp.send(method, params, this.tab().sessionId, timeoutMs); }
+    catch (e) {
+      if (this.pendingDialog) return;
+      throw e;
+    }
   }
 
   private async objectId(el: El) {
@@ -572,14 +809,26 @@ export class Browser {
 
   private async quadCenter(el: El): Promise<{ x: number; y: number } | null> {
     try {
+      const box = await this.quadBox(el);
+      return box ? { x: box.x + box.w / 2, y: box.y + box.h / 2 } : null;
+    } catch { return null; }
+  }
+
+  /** Bounding box of an element in the top document's viewport coordinates. */
+  private async quadBox(el: El): Promise<{ x: number; y: number; w: number; h: number } | null> {
+    try {
       const { quads } = await this.cdp.send<any>("DOM.getContentQuads", { backendNodeId: el.bid }, el.sid);
       if (!quads?.length) return null;
       // Largest quad wins (wrapped inline links have several).
       let best = quads[0], area = 0;
       for (const q of quads) { const a = Math.abs((q[2] - q[0]) * (q[5] - q[1])); if (a > area) { area = a; best = q; } }
       if (area < 1) return null;
+      const xs = [best[0], best[2], best[4], best[6]], ys = [best[1], best[3], best[5], best[7]];
       const off = el.sid === this.tab().sessionId ? { x: 0, y: 0 } : await this.rootOffset(el);
-      return { x: (best[0] + best[2] + best[4] + best[6]) / 4 + off.x, y: (best[1] + best[3] + best[5] + best[7]) / 4 + off.y };
+      return {
+        x: Math.min(...xs) + off.x, y: Math.min(...ys) + off.y,
+        w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys),
+      };
     } catch { return null; }
   }
 
@@ -652,17 +901,34 @@ export class Browser {
     }
   }
 
-  async click(target: string, opts: { button?: "left" | "right" | "middle"; count?: number; timeoutMs?: number } = {}) {
-    const { x, y } = await this.actionable(target, { timeoutMs: opts.timeoutMs });
+  async click(target: string, opts: { button?: "left" | "right" | "middle"; count?: number; timeoutMs?: number; newTab?: boolean } = {}) {
+    const { id, x, y } = await this.actionable(target, { timeoutMs: opts.timeoutMs });
     const button = opts.button ?? "left";
     const clickCount = opts.count ?? 1;
     const before = Date.now();
-    await this.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    const tabsBefore = this.tabs.size;
+    // Ctrl-click is not reliable for every scheme (file:, buttons that open popups). For a real
+    // link, open the href as a target directly; otherwise fall back to a modified click.
+    if (opts.newTab) {
+      const href = await this.callOn(id, "function(){ const a = this.closest && this.closest('a'); return a ? a.href : ''; }").catch(() => "");
+      if (typeof href === "string" && href && !href.startsWith("javascript:")) {
+        const { targetId } = await this.cdp.send("Target.createTarget", { url: href });
+        this.current = await this.attach(targetId);
+        await this.pageReady(Date.now());
+        return;
+      }
+    }
+    // Ctrl-click (Meta on macOS) asks the page/browser to open the link in a new tab.
+    const modifiers = opts.newTab ? (process.platform === "darwin" ? 4 : 2) : 0;
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
     for (let i = 1; i <= clickCount; i++) {
-      await this.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: i });
-      await this.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: i });
+      await this.sendInput("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: i, modifiers });
+      await this.sendInput("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: i, modifiers });
     }
     await this.settle(before);
+    if (opts.newTab) {
+      for (let i = 0; i < 40 && this.tabs.size <= tabsBefore; i++) await sleep(50);
+    }
   }
 
   /**
@@ -769,8 +1035,8 @@ export class Browser {
     const base = { key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, modifiers };
     let text = modifiers & ~8 ? undefined : def.text; // no text when Ctrl/Alt/Meta held
     if (text && modifiers & 8 && keyName.length === 1 && /[a-z]/.test(keyName)) text = keyName.toUpperCase();
-    await this.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base, text, unmodifiedText: text });
-    await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    await this.sendInput("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base, text, unmodifiedText: text });
+    await this.sendInput("Input.dispatchKeyEvent", { type: "keyUp", ...base });
     await this.settle(before);
   }
 
@@ -788,14 +1054,15 @@ export class Browser {
     await sleep(150);
   }
 
-  async screenshot(opts: { fullPage?: boolean; target?: string; format?: "png" | "jpeg"; quality?: number } = {}) {
+  async screenshot(opts: { fullPage?: boolean; target?: string; format?: "png" | "jpeg"; quality?: number; ifChanged?: boolean } = {}): Promise<Buffer | null> {
+    const tab = this.tab();
     const params: any = { format: opts.format ?? "png", captureBeyondViewport: !!opts.fullPage };
     if (opts.format === "jpeg") params.quality = opts.quality ?? 70;
     if (opts.target) {
       const id = await this.resolve(opts.target);
       await this.scrollIntoView(id);
       const { model } = await this.cdp.send<any>("DOM.getBoxModel", { backendNodeId: id.bid }, id.sid);
-      const off = id.sid === this.tab().sessionId ? { x: 0, y: 0 } : await this.rootOffset(id);
+      const off = id.sid === tab.sessionId ? { x: 0, y: 0 } : await this.rootOffset(id);
       const xs = model.border.filter((_: number, i: number) => i % 2 === 0).map((v: number) => v + off.x), ys = model.border.filter((_: number, i: number) => i % 2 === 1).map((v: number) => v + off.y);
       params.clip = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), scale: 1 };
     } else if (opts.fullPage) {
@@ -804,7 +1071,13 @@ export class Browser {
       params.clip = { x: 0, y: 0, width: size.width, height: Math.min(size.height, 16384), scale: 1 };
     }
     const { data } = await this.send("Page.captureScreenshot", params);
-    return Buffer.from(data, "base64");
+    const buf = Buffer.from(data, "base64");
+    if (opts.ifChanged) {
+      const hash = createHash("sha256").update(buf).digest("hex");
+      if (hash === tab.lastShotHash) return null;
+      tab.lastShotHash = hash;
+    }
+    return buf;
   }
 
   async text(target?: string, max = 4000) {
@@ -814,6 +1087,375 @@ export class Browser {
       : await this.evaluate(expr!);
     const s = String(t ?? "").replace(/\n{3,}/g, "\n\n").trim();
     return s.length > max ? s.slice(0, max) + `\n… (${s.length - max} more chars)` : s;
+  }
+
+  // ---- targeted queries -------------------------------------------------
+
+  async getHtml(target: string) {
+    return String(await this.callOn(await this.resolve(target), "function(){ return this.innerHTML ?? ''; }") ?? "");
+  }
+
+  async getValue(target: string) {
+    return String(await this.callOn(await this.resolve(target), "function(){ return this.value ?? this.getAttribute('value') ?? ''; }") ?? "");
+  }
+
+  async getAttr(target: string, name: string) {
+    const v = await this.callOn(await this.resolve(target), "function(n){ return this.getAttribute(n); }", [name]);
+    return v === undefined ? null : String(v);
+  }
+
+  async getCount(selector: string) {
+    return Number(await this.evaluate(`document.querySelectorAll(${JSON.stringify(selector)}).length`)) || 0;
+  }
+
+  async getBox(target: string) {
+    const id = await this.resolve(target);
+    const { model } = await this.cdp.send<any>("DOM.getBoxModel", { backendNodeId: id.bid }, id.sid);
+    const off = id.sid === this.tab().sessionId ? { x: 0, y: 0 } : await this.rootOffset(id);
+    return { x: model.border[0] + off.x, y: model.border[1] + off.y, width: model.width, height: model.height };
+  }
+
+  async getStyles(target: string, props = ["display", "visibility", "opacity", "color", "backgroundColor", "fontSize", "fontWeight", "position", "cursor"]) {
+    const id = await this.resolve(target);
+    return await this.callOn(id, `function(props){ const s = getComputedStyle(this); return Object.fromEntries(props.map(p => [p, s.getPropertyValue(p)])); }`, [props]) as Record<string, string>;
+  }
+
+  async isVisible(target: string) {
+    try {
+      return !!(await this.callOn(await this.resolve(target), `function(){
+        const s = getComputedStyle(this), r = this.getBoundingClientRect();
+        return this.isConnected && s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+      }`));
+    } catch { return false; }
+  }
+
+  async isEnabled(target: string) {
+    return !(await this.callOn(await this.resolve(target), `function(){
+      return !!(this.disabled || this.closest('[aria-disabled="true"],fieldset[disabled]'));
+    }`));
+  }
+
+  async isChecked(target: string) {
+    return !!(await this.callOn(await this.resolve(target), "function(){ return !!this.checked; }"));
+  }
+
+  async setChecked(target: string, checked: boolean) {
+    const { id } = await this.actionable(target, { hitTest: false });
+    const state = await this.callOn(id, "function(){ return { on: !!this.checked, type: (this.type || '').toLowerCase(), tag: this.tagName }; }") as any;
+    if (!checked && state.tag === "INPUT" && state.type === "radio" && state.on)
+      throw new Error("a radio button cannot be unchecked");
+    if (state.on !== checked) await this.click(target);
+    else await this.networkIdle(50, 200);
+  }
+
+  async focus(target: string) {
+    const { id } = await this.actionable(target, { enabled: false, hitTest: false });
+    await this.callOn(id, "function(){ this.focus(); }");
+  }
+
+  async scrollIntoViewTarget(target: string) {
+    await this.scrollIntoView(await this.resolve(target));
+  }
+
+  async highlight(target: string) {
+    const id = await this.resolve(target);
+    await this.callOn(id, "function(){ this.style.outline = '2px solid #ff00ff'; this.style.outlineOffset = '1px'; }");
+  }
+
+  async upload(target: string, files: string[]) {
+    const id = await this.resolve(target);
+    await this.cdp.send("DOM.setFileInputFiles", { files, backendNodeId: id.bid }, id.sid);
+    return files;
+  }
+
+  async download(target: string, dir: string, timeoutMs = 30_000) {
+    mkdirSync(dir, { recursive: true });
+    await this.cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dir, eventsEnabled: true });
+    const tab = this.tab();
+    let filename = "";
+    let cleanup = () => {};
+    const done = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => { cleanup(); reject(new Error(`download did not finish in ${timeoutMs} ms`)); }, timeoutMs);
+      const offBegin = this.cdp.on("Browser.downloadWillBegin", (p: any) => {
+        if (!p.frameId || p.frameId === tab.mainFrame) filename = p.suggestedFilename || filename;
+      });
+      const offProgress = this.cdp.on("Browser.downloadProgress", (p: any) => {
+        if (p.state === "completed") { cleanup(); resolve(join(dir, filename || p.guid)); }
+        else if (p.state === "canceled") { cleanup(); reject(new Error("download canceled")); }
+      });
+      cleanup = () => { clearTimeout(timer); offBegin(); offProgress(); };
+    });
+    try {
+      await this.click(target);
+      return await done;
+    } catch (e) {
+      cleanup();
+      throw e;
+    }
+  }
+
+  async pdf(opts: { landscape?: boolean; printBackground?: boolean; scale?: number } = {}) {
+    const { data } = await this.send("Page.printToPDF", {
+      printBackground: opts.printBackground ?? true, landscape: !!opts.landscape,
+      scale: opts.scale ?? 1, preferCSSPageSize: true,
+    });
+    return Buffer.from(data, "base64");
+  }
+
+  async drag(source: string, target: string) {
+    const a = await this.actionable(source);
+    const b = await this.center(await this.resolve(target));
+    const before = Date.now();
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mouseMoved", x: a.x, y: a.y });
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mousePressed", x: a.x, y: a.y, button: "left", buttons: 1, clickCount: 1 });
+    const steps = 8;
+    for (let i = 1; i <= steps; i++)
+      await this.sendInput("Input.dispatchMouseEvent", { type: "mouseMoved", x: a.x + (b.x - a.x) * i / steps, y: a.y + (b.y - a.y) * i / steps, button: "left", buttons: 1 });
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 });
+    await this.settle(before);
+  }
+
+  /** Real per-character keystrokes (as opposed to `type`, which inserts text in one event). */
+  async typeKeys(text: string) {
+    for (const ch of text) {
+      if (ch === "\n") { await this.keyDown("Enter"); await this.keyUp("Enter"); continue; }
+      const code = ch === " " ? "Space" : /[a-zA-Z0-9]/.test(ch) ? (/[a-z]/.test(ch) ? `Key${ch.toUpperCase()}` : /[A-Z]/.test(ch) ? `Key${ch}` : `Digit${ch}`) : "";
+      const vk = ch.toUpperCase().charCodeAt(0);
+      await this.sendInput("Input.dispatchKeyEvent", { type: "keyDown", key: ch, text: ch, unmodifiedText: ch, code, windowsVirtualKeyCode: vk });
+      await this.sendInput("Input.dispatchKeyEvent", { type: "keyUp", key: ch, code, windowsVirtualKeyCode: vk });
+    }
+  }
+
+  private keyBase(combo: string) {
+    const parts = combo.split("+");
+    const keyName = parts.pop()!;
+    const modifiers = parts.reduce((m, p) => m | modifierBit(p), 0);
+    const def = KEYS[keyName] ?? (keyName.length === 1 ? { key: keyName, code: `Key${keyName.toUpperCase()}`, keyCode: keyName.toUpperCase().charCodeAt(0), text: keyName } : undefined);
+    if (!def) throw new Error(`unknown key: ${keyName}`);
+    let text = modifiers & ~8 ? undefined : def.text;
+    if (text && modifiers & 8 && keyName.length === 1 && /[a-z]/.test(keyName)) text = keyName.toUpperCase();
+    return { base: { key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, modifiers }, text };
+  }
+
+  async keyDown(combo: string) {
+    const { base, text } = this.keyBase(combo);
+    await this.sendInput("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base, text, unmodifiedText: text });
+  }
+
+  async keyUp(combo: string) {
+    const { base } = this.keyBase(combo);
+    await this.sendInput("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+
+  async mouseMove(x: number, y: number) {
+    this.mouseAt = { x, y };
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  }
+  async mouseDown(button: "left" | "right" | "middle" = "left") {
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mousePressed", ...this.mouseAt, button, buttons: 1, clickCount: 1 });
+  }
+  async mouseUp(button: "left" | "right" | "middle" = "left") {
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mouseReleased", ...this.mouseAt, button, buttons: 0, clickCount: 1 });
+  }
+  async mouseWheel(deltaX: number, deltaY: number) {
+    await this.sendInput("Input.dispatchMouseEvent", { type: "mouseWheel", ...this.mouseAt, deltaX, deltaY });
+  }
+
+  // ---- emulation, cookies, storage, network ------------------------------
+
+  async setViewport(width: number, height: number, scale = 1, mobile = false) {
+    await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile });
+  }
+
+  async setDevice(name: string) {
+    const key = Object.keys(DEVICES).find((k) => k.toLowerCase() === name.toLowerCase());
+    const d = key ? DEVICES[key] : undefined;
+    if (!d) throw new Error(`unknown device: ${name} (known: ${Object.keys(DEVICES).join(", ")})`);
+    await this.setViewport(d.width, d.height, d.scale, d.mobile);
+    await this.send("Emulation.setTouchEmulationEnabled", { enabled: d.mobile, maxTouchPoints: d.mobile ? 5 : 1 }).catch(() => {});
+    if (d.userAgent) await this.send("Network.setUserAgentOverride", { userAgent: d.userAgent }).catch(() => {});
+  }
+
+  async setMedia(opts: { colorScheme?: "dark" | "light" | "no-preference"; reducedMotion?: boolean }) {
+    const features: any[] = [];
+    if (opts.colorScheme) features.push({ name: "prefers-color-scheme", value: opts.colorScheme });
+    if (opts.reducedMotion !== undefined) features.push({ name: "prefers-reduced-motion", value: opts.reducedMotion ? "reduce" : "no-preference" });
+    await this.send("Emulation.setEmulatedMedia", { features });
+  }
+
+  async setOffline(offline: boolean) {
+    await this.send("Network.emulateNetworkConditions", { offline, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  }
+
+  async setHeaders(headers: Record<string, string>) {
+    await this.send("Network.setExtraHTTPHeaders", { headers });
+  }
+
+  async setGeo(latitude: number, longitude: number, accuracy = 1) {
+    await this.send("Emulation.setGeolocationOverride", { latitude, longitude, accuracy });
+    try {
+      const { url } = await this.info();
+      const origin = new URL(url).origin;
+      if (origin !== "null") await this.cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin });
+    } catch { /* file:// and opaque origins cannot be granted */ }
+  }
+
+  async cookies(url?: string): Promise<any[]> {
+    const r: any = url ? await this.send("Network.getCookies", { urls: [url] }) : await this.send("Network.getAllCookies");
+    return r.cookies ?? [];
+  }
+
+  async setCookie(cookie: Record<string, unknown>) {
+    const r: any = await this.send("Network.setCookie", cookie);
+    if (r.success === false) throw new Error("cookie rejected by the browser");
+  }
+
+  async clearCookies(url?: string) {
+    if (!url) return void await this.send("Network.clearBrowserCookies");
+    for (const c of await this.cookies(url)) await this.send("Network.deleteCookies", { name: c.name, domain: c.domain, path: c.path });
+  }
+
+  async storage(kind: "local" | "session") {
+    const obj = kind === "local" ? "localStorage" : "sessionStorage";
+    return await this.evaluate(`Object.fromEntries(Object.entries(${obj}))`) as Record<string, string>;
+  }
+
+  async setStorage(kind: "local" | "session", key: string, value: string) {
+    const obj = kind === "local" ? "localStorage" : "sessionStorage";
+    await this.evaluate(`${obj}.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`);
+  }
+
+  async clearStorage(kind: "local" | "session") {
+    const obj = kind === "local" ? "localStorage" : "sessionStorage";
+    await this.evaluate(`${obj}.clear()`);
+  }
+
+  networkRequests(filter?: string): NetRequest[] {
+    const list = [...this.tab().requests.values()];
+    return filter ? list.filter((r) => r.url.includes(filter)) : list;
+  }
+
+  clearNetwork() { this.tab().requests.clear(); }
+
+  /** A compact HAR 1.2 export of the requests seen on this tab (no bodies). */
+  networkHar() {
+    const headers = (h?: Record<string, string>) => Object.entries(h ?? {}).map(([name, value]) => ({ name, value: String(value) }));
+    const entries = [...this.tab().requests.values()].map((r) => ({
+      startedDateTime: new Date(r.ts).toISOString(),
+      time: 0,
+      request: {
+        method: r.method, url: r.url, httpVersion: "HTTP/1.1",
+        headers: headers(r.requestHeaders), queryString: [], cookies: [], headersSize: -1, bodySize: -1,
+      },
+      response: {
+        status: r.status ?? 0, statusText: "", httpVersion: "HTTP/1.1",
+        headers: headers(r.responseHeaders), cookies: [],
+        content: { size: r.size ?? 0, mimeType: r.mime ?? "" },
+        redirectURL: "", headersSize: -1, bodySize: r.size ?? -1,
+      },
+      cache: {},
+      timings: { send: 0, wait: 0, receive: 0 },
+    }));
+    return {
+      log: {
+        version: "1.2",
+        creator: { name: "monad-browser", version: "0.1.0-alpha.0" },
+        entries,
+      },
+    };
+  }
+
+  async route(route: Route) {
+    const tab = this.tab();
+    tab.routes.push(route);
+    await this.refreshFetch(tab);
+  }
+
+  async unroute(pattern?: string) {
+    const tab = this.tab();
+    tab.routes = pattern ? tab.routes.filter((r) => r.pattern !== pattern) : [];
+    await this.refreshFetch(tab);
+  }
+
+  async traceStart() {
+    if (this.traceActive) throw new Error("a trace is already running");
+    await this.send("Tracing.start", {
+      categories: "devtools.timeline,disabled-by-default-devtools.timeline",
+      transferMode: "ReturnAsStream",
+    });
+    this.traceActive = true;
+  }
+
+  async traceStop(path: string) {
+    if (!this.traceActive) throw new Error("no trace is running");
+    const done = this.cdp.waitFor("Tracing.tracingComplete", { timeoutMs: 30_000 });
+    await this.send("Tracing.end");
+    const { stream } = await done;
+    this.traceActive = false;
+    if (!stream) throw new Error("Chrome did not return a trace stream");
+    const chunks: Buffer[] = [];
+    while (true) {
+      // The stream is owned by the page session that started Tracing.
+      const r: any = await this.send("IO.read", { handle: stream, size: 1 << 20 });
+      chunks.push(Buffer.from(r.data, r.base64Encoded ? "base64" : "utf8"));
+      if (r.eof) break;
+    }
+    await this.send("IO.close", { handle: stream }).catch(() => {});
+    writeFileSync(path, Buffer.concat(chunks));
+    return path;
+  }
+
+  // ---- dialogs ----------------------------------------------------------
+
+  dialogStatus() { return this.pendingDialog; }
+
+  async dialogAccept(promptText?: string) {
+    const d = this.pendingDialog;
+    if (!d) throw new Error("no JavaScript dialog is open");
+    await this.cdp.send("Page.handleJavaScriptDialog", { accept: true, promptText: promptText ?? d.defaultPrompt ?? "" }, d.sessionId);
+    this.pendingDialog = undefined;
+  }
+
+  async dialogDismiss() {
+    const d = this.pendingDialog;
+    if (!d) throw new Error("no JavaScript dialog is open");
+    await this.cdp.send("Page.handleJavaScriptDialog", { accept: false }, d.sessionId);
+    this.pendingDialog = undefined;
+  }
+
+  // ---- screenshots ------------------------------------------------------
+
+  /** Viewport screenshot with numbered labels for every visible ref; returns the legend too. */
+  async annotatedScreenshot(opts: { target?: string; format?: "png" | "jpeg"; quality?: number } = {}) {
+    const tab = this.tab();
+    const items: { ref: number; role: string; name: string; x: number; y: number }[] = [];
+    for (const [ref, entry] of tab.refs.byRef) {
+      const b = await this.quadBox(entry.el);
+      // Just above the top-left corner: a badge over the middle covers the control's own label.
+      if (b) items.push({ ref, role: entry.role, name: entry.name, x: Math.max(2, b.x), y: Math.max(14, b.y) });
+    }
+    const capped = items.slice(0, 100);
+    const html = capped.map((i) =>
+      `<span style="position:fixed;left:${i.x}px;top:${i.y}px;transform:translate(0,-100%);` +
+      `background:#ff0;color:#000;border:1px solid #000;border-radius:2px;font:11px/1.2 monospace;padding:1px 3px;z-index:2147483647">${i.ref}</span>`).join("");
+    await this.evaluate(`(() => {
+      document.getElementById('__monad_annot')?.remove();
+      const d = document.createElement('div');
+      d.id = '__monad_annot';
+      d.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647';
+      d.innerHTML = ${JSON.stringify(html)};
+      document.documentElement.appendChild(d);
+      return true;
+    })()`);
+    try {
+      const buf = await this.screenshot({ ...opts, ifChanged: false });
+      if (!buf) throw new Error("screenshot failed");
+      const legend = capped.map((i) => `[${i.ref}] @${i.ref} ${i.role}${i.name ? ` "${i.name}"` : ""}`);
+      if (items.length > capped.length) legend.push(`… ${items.length - capped.length} more`);
+      return { buffer: buf, legend };
+    } finally {
+      await this.evaluate("document.getElementById('__monad_annot')?.remove()").catch(() => {});
+    }
   }
 
   async back() { const b = Date.now(); await this.evaluate("history.back()"); await this.settle(b); }
