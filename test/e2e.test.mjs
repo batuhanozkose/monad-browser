@@ -2,6 +2,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { findChrome } from "../dist/chrome.js";
@@ -87,6 +88,9 @@ test("mcp server lists tools and calls them", { skip }, () => {
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_open", arguments: { url: `${F}/form.html` } } },
   ].map((m) => JSON.stringify(m)).join("\n") + "\n";
   const out = execFileSync(process.execPath, [cli, "mcp"], { env, input, encoding: "utf8" }).trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(out[0].result.serverInfo.name, "monad-browser");
+  assert.equal(out[0].result.serverInfo.version, JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8")).version);
+  assert.equal(out[1].result.tools.length, 14);
   assert.ok(out[1].result.tools.some((t) => t.name === "browser_run"));
   assert.match(out[2].result.content[0].text, /\[textbox Name\]@3/);
 });
@@ -261,9 +265,9 @@ test("network requests and route fulfill/abort", { skip }, async () => {
     const { mkdtempSync, readFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const har = join(mkdtempSync(join(tmpdir(), "mb-har-")), "n.har");
-    mb("network", "har", "start");
+    mb("network", "har", "start", har);
     mb("reload"); mb("wait", "--text", "real", "--timeout", "5000");
-    assert.match(mb("network", "har", "stop", har), /entries/);
+    assert.match(mb("network", "har", "stop"), /entries/);
     assert.match(readFileSync(har, "utf8"), /"version": "1.2"/);
     assert.match(readFileSync(har, "utf8"), /\/api/);
     mb("network", "route", "**/api", "--body", '{"mocked":true}', "--content-type", "application/json");
@@ -297,6 +301,11 @@ test("upload, download, drag and keyboard", { skip }, async () => {
   mb("focus", "@3");
   mb("keyboard", "type", "hey");
   assert.equal(mb("get", "value", "@3"), "hey");
+  // Modifier keys are valid keydown/keyup targets (and chords still work).
+  assert.equal(mb("keydown", "Shift"), "ok");
+  assert.equal(mb("keyup", "Shift"), "ok");
+  assert.equal(mb("keydown", "Control+a"), "ok");
+  assert.equal(mb("keyup", "Control+a"), "ok");
 });
 
 test("json snapshot delta applies to the previous tree", { skip }, () => {
@@ -344,6 +353,14 @@ test("dialog status/accept/dismiss with --no-auto-dialog", { skip }, () => {
 test("doctor and skills work without a browser", { skip: false }, () => {
   assert.match(execFileSync(process.execPath, [cli, "doctor"], { env, encoding: "utf8" }), /monad-browser doctor/);
   assert.match(execFileSync(process.execPath, [cli, "skills", "list"], { env, encoding: "utf8" }), /^core\t/m);
+  assert.match(execFileSync(process.execPath, [cli, "skills", "path"], { env, encoding: "utf8" }).trim(), /[\\/]\.agents[\\/]skills[\\/]monad-browser$/);
+  const printed = execFileSync(process.execPath, [cli, "skills", "get", "core"], { env, encoding: "utf8" });
+  assert.equal(printed, execFileSync(process.execPath, [cli, "install-skill", "--print"], { env, encoding: "utf8" }));
+  const pkg = JSON.parse(readFileSync(join(here, "..", "package.json"), "utf8"));
+  assert.equal(execFileSync(process.execPath, [cli, "--version"], { env, encoding: "utf8" }).trim(), `monad-browser ${pkg.version}`);
+  // Help must not run the command (mcp would otherwise wait on stdin).
+  assert.match(execFileSync(process.execPath, [cli, "mcp", "--help"], { env, encoding: "utf8", timeout: 2000 }), /^usage: mb mcp/);
+  assert.match(execFileSync(process.execPath, [cli, "snapshot", "--help"], { env, encoding: "utf8", timeout: 2000 }), /^usage: mb snapshot/);
 });
 
 test("json delta falls back to full when the splice would not save space", { skip }, () => {

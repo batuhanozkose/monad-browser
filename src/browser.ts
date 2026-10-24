@@ -7,6 +7,7 @@ import { launchChrome, resolveCdpEndpoint, cleanupProfile, type LaunchedChrome }
 import { renderDiff, treeChange, matchGlob, type TreeChange } from "./diff.js";
 import { takeSnapshot, newRefTable, elKey, DEFAULT_MAX_LINES, type El, type RefTable, type SnapshotOptions } from "./snapshot.js";
 import { KEYS, modifierBit } from "./keys.js";
+import { VERSION } from "./version.js";
 
 /**
  * Does `code` parse when wrapped this way? `new Function` only compiles — it is never
@@ -116,6 +117,8 @@ export class Browser {
   pendingDialog?: { type: string; message: string; defaultPrompt?: string; sessionId: string };
   private mouseAt = { x: 0, y: 0 };
   private traceActive = false;
+  /** Path given to `network har start`, reused by `network har stop` when it has none. */
+  harPath?: string;
   console: string[] = [];
   actionTimeout = Number(process.env.MONAD_ACTION_TIMEOUT ?? 5000);
 
@@ -1359,7 +1362,7 @@ export class Browser {
     return {
       log: {
         version: "1.2",
-        creator: { name: "monad-browser", version: "0.1.0-alpha.0" },
+        creator: { name: "monad-browser", version: VERSION },
         entries,
       },
     };

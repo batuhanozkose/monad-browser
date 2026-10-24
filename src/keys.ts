@@ -16,6 +16,12 @@ export const KEYS: Record<string, KeyDef> = {
   End: { key: "End", code: "End", keyCode: 35 },
   PageUp: { key: "PageUp", code: "PageUp", keyCode: 33 },
   PageDown: { key: "PageDown", code: "PageDown", keyCode: 34 },
+  Shift: { key: "Shift", code: "ShiftLeft", keyCode: 16 },
+  Control: { key: "Control", code: "ControlLeft", keyCode: 17 },
+  Alt: { key: "Alt", code: "AltLeft", keyCode: 18 },
+  Meta: { key: "Meta", code: "MetaLeft", keyCode: 91 },
+  CapsLock: { key: "CapsLock", code: "CapsLock", keyCode: 20 },
+  Insert: { key: "Insert", code: "Insert", keyCode: 45 },
 };
 for (let i = 1; i <= 12; i++) KEYS[`F${i}`] = { key: `F${i}`, code: `F${i}`, keyCode: 111 + i };
 for (let d = 0; d <= 9; d++) KEYS[String(d)] = { key: String(d), code: `Digit${d}`, keyCode: 48 + d, text: String(d) };

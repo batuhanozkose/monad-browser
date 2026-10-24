@@ -10,7 +10,7 @@ snapshots with stable `@N` refs.
 [![node](https://img.shields.io/badge/node-%E2%89%A5%2022-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![browser](https://img.shields.io/badge/browser-raw%20CDP-6366f1?style=flat-square)](#how-it-works)
-[![mcp](https://img.shields.io/badge/MCP-10%20lean%20tools-8b5cf6?style=flat-square)](#mcp-server)
+[![mcp](https://img.shields.io/badge/MCP-14%20lean%20tools-8b5cf6?style=flat-square)](#mcp-server)
 
 [Quick start](#quick-start) · [Why](#why-monad-browser) · [Benchmarks](#benchmarks) · [How it works](#how-it-works) ·
 [Commands](#command-reference) · [MCP](#mcp-server) · [Agent skill](#agent-skill) · [Screenshots](#screenshots)
@@ -43,17 +43,23 @@ unix-socket round trip, so a warm `mb` call costs roughly 40 ms.
 ## Quick start
 
 ```sh
+npm i -g monad-browser
+mb open example.com
+```
+
+Or work from source:
+
+```sh
 git clone https://github.com/batuhanozkose/monad-browser
 cd monad-browser
 npm install            # installs the two build-time dev dependencies
 npm run build          # tsc -> dist/
-npm link               # optional: put `mb` on your PATH
+npm link               # put `mb` on your PATH
 ```
 
 > Chrome or Chromium must be installed. `mb` finds the usual locations; point it elsewhere with
-> `MONAD_CHROME=/path/to/chrome`. A published npm package (`npm i -g monad-browser`) is on the
-> roadmap; until then the source install above is the way in. `npm run build:native` is optional —
-> it compiles the Go thin client for a faster hot path.
+> `MONAD_CHROME=/path/to/chrome`. `npm run build:native` is optional — it compiles the Go thin
+> client for a faster hot path.
 
 A real session — open Hacker News, list the interactive elements, follow one story:
 
@@ -279,25 +285,25 @@ frames. Actions auto-wait until the element is actionable; a covering element is
 
 | Command | What it does |
 | --- | --- |
-| `open <url> [-s] [-i]` | navigate the current tab (alias `goto`, `navigate`) |
-| `snapshot [-i] [-d] [--full] [--json] [--max-lines N]` | accessibility snapshot with `@N` refs (`-i` interactive only, `-d` only changes) |
+| `open <url> [-s] [-i]` | navigate the current tab (aliases `goto`, `navigate`) |
+| `snapshot [-i] [-d] [--full] [--json] [--max-lines N] [--max-text N] [--cache] [--cache-ms N]` | accessibility snapshot with `@N` refs (`-i` interactive only, `-d` only changes) |
 | `click <target> [--button right] [--count 2] [--new-tab] [-s]` | click, auto-waiting |
 | `fill <target> <text> [--submit] [-s]` | clear and type; `--submit` presses Enter |
 | `type <text> [--into @ref]` · `keyboard type\|inserttext <text>` | insert text / real keystrokes |
-| `press <key>` · `keydown <key>` · `keyup <key>` | `Enter`, `Tab`, `Escape`, `Control+a`, … |
+| `press <key> [-s]` · `keydown <key>` · `keyup <key>` | `Enter`, `Tab`, `Escape`, `Control+a`, … |
 | `select <target> <value...>` · `check` · `uncheck` | choose options / toggle checkboxes |
 | `hover` · `scroll [dir] [px] [--on @ref]` · `scrollintoview <target>` | pointer / viewport |
 | `drag <src> <dst>` · `focus <target>` · `highlight <target>` | drag / focus / outline |
-| `upload <target> <file...>` · `download <target> [dir]` · `pdf [path]` | files and print |
+| `upload <target> <file...>` · `download <target> [dir] [--timeout ms]` · `pdf [path] [--landscape] [--no-print-background]` | files and print |
 | `mouse move\|down\|up\|wheel …` | raw pointer events |
 | `eval <js>` | evaluate in the page (top-level `await`/`return` allowed) |
-| `get <text\|html\|value\|attr\|title\|url\|count\|box\|styles> …` | one targeted value |
+| `get <text\|html\|value\|attr\|title\|url\|cdp-url\|count\|box\|styles> …` | one targeted value |
 | `is <visible\|enabled\|checked> <target>` | state question |
 | `find <role\|text\|label\|placeholder\|alt\|title\|testid\|first\|last\|nth> …` | semantic locator + action |
 | `text [target] [--max N]` | visible text of the page or an element |
-| `read [url] [--outline] [--filter T] [--raw] [--require-md]` | markdown/text; URL reads do not launch Chrome |
-| `screenshot [path] [--full] [--on @ref] [--jpeg] [--annotate] [--if-changed]` | image of the viewport/page/element |
-| `diff snapshot [--baseline file]` · `diff url <a> <b>` | compare states or pages |
+| `read [url] [--outline] [--filter T] [--raw] [--require-md] [--llms index\|full] [--timeout ms]` | markdown/text; URL reads do not launch Chrome |
+| `screenshot [path] [--full] [--on @ref] [--jpeg] [--format png\|jpeg] [--quality N] [--annotate] [--if-changed] [--dir D]` | image of the viewport/page/element |
+| `diff snapshot [--baseline file] [-i]` · `diff url <a> <b> [-i]` | compare states or pages |
 | `back` · `forward` · `reload` | history & reload |
 | `wait <ms\|selector\|--idle\|--text T\|--url GLOB\|--fn JS\|--state hidden>` | wait for a condition |
 | `cookies [get\|set\|clear]` · `storage local\|session` | cookie and web-storage control |
@@ -314,6 +320,9 @@ frames. Actions auto-wait until the element is actionable; a covering element is
 | `doctor [--fix]` · `skills list\|get\|path` | diagnostics · version-matched agent skills |
 | `install-skill [--project \| --dir D \| --print]` | write `SKILL.md` for coding agents |
 | `start` · `stop [--all]` · `status` · `sessions` | daemon lifecycle |
+
+Aliases: `goto` / `navigate` → `open`, `snap` → `snapshot`, `js` → `eval`, `scrollinto` →
+`scrollintoview`, `key` → `press`.
 
 Global options come before the command:
 
@@ -354,8 +363,9 @@ and Chrome DevTools MCP servers, and ~10× less than agent-browser's core profil
 ## Agent skill
 
 `mb install-skill` writes a `SKILL.md` teaching a coding agent (Claude Code, Codex, OpenCode, …) to
-use the CLI well. `mb skills get core` prints the same, version-matched text without writing files;
-`mb skills path` shows where it installs.
+use the CLI well. `mb skills list` shows the bundled skills; `mb skills get core` prints the same,
+version-matched text without writing files; `mb skills path` prints the cross-agent install
+directory (`~/.agents/skills/monad-browser`).
 
 ```sh
 mb install-skill              # ~/.claude/skills + ~/.agents/skills
@@ -433,8 +443,7 @@ client ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark har
 **Alpha.** Done: daemon, CDP core, snapshot (incl. iframes), `run`, auto-wait, diff snapshots with
 revisions/JSON patches, `read`, targeted queries and semantic locators, form/file actions,
 annotated/change-only screenshots, cookies/storage/network, emulation, config/doctor/skills, MCP
-server, benchmarks. Next: Docker / E2B packaging, published npm package, a Windows native client,
-pixel screenshot diffs.
+server, benchmarks. Next: Docker / E2B packaging, a Windows native client, pixel screenshot diffs.
 
 ## License
 

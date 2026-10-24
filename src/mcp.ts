@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { call } from "./client.js";
 import { RUN_HELP } from "./run.js";
+import { VERSION } from "./version.js";
 
 type Tool = {
   name: string;
@@ -56,9 +57,9 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "browser_get",
-    description: "Read one value from the page instead of a whole snapshot: text, html, value, attr, title, url, count, box, or styles.",
+    description: "Read one value from the page instead of a whole snapshot: text, html, value, attr, title, url, cdp-url, count, box, or styles.",
     inputSchema: obj({
-      what: { type: "string", enum: ["text", "html", "value", "attr", "title", "url", "count", "box", "styles"] },
+      what: { type: "string", enum: ["text", "html", "value", "attr", "title", "url", "cdp-url", "count", "box", "styles"] },
       target: str("optional @N/selector for element queries"),
       name: str("attribute name for attr"),
     }, ["what"]),
@@ -104,7 +105,7 @@ export const TOOLS: Tool[] = [
     name: "browser_select",
     description: `Choose option(s) in a <select>. ${T}`,
     inputSchema: obj({ target: str("select"), values: { type: "array", items: { type: "string" } } }, ["target", "values"]),
-    argv: (a) => ["select", a.target, ...a.values, "-s"],
+    argv: (a) => ["select", a.target, ...a.values],
   },
   {
     name: "browser_text",
@@ -148,7 +149,7 @@ export async function runMcp(session: string, launch: string[]) {
         return reply({
           protocolVersion: params?.protocolVersion ?? "2025-06-18",
           capabilities: { tools: {} },
-          serverInfo: { name: "monad-browser", version: "0.1.0-alpha.0" },
+          serverInfo: { name: "monad-browser", version: VERSION },
           instructions: "Headless browser. Prefer browser_run for multi-step work and browser_read for docs/articles. Actions return only what changed on the page; browser_get/browser_find avoid full snapshots.",
         });
       case "notifications/initialized":

@@ -70,7 +70,7 @@ export const COMMANDS: Record<string, Cmd> = {
     },
   },
   open: {
-    usage: "open <url> [-s] [-i]   navigate the current tab (alias: goto)",
+    usage: "open <url> [-s] [-i]   navigate the current tab (aliases: goto, navigate)",
     async run(ctx, args, flags) {
       need(args, 1, this.usage);
       const { url, title } = await ctx.browser.goto(args[0]);
@@ -114,7 +114,7 @@ export const COMMANDS: Record<string, Cmd> = {
     },
   },
   press: {
-    usage: "press <key>   e.g. Enter, Tab, Escape, Control+a, Shift+Tab",
+    usage: "press <key> [-s]   e.g. Enter, Tab, Escape, Control+a, Shift+Tab",
     async run(ctx, args, flags) {
       need(args, 1, this.usage);
       await ctx.browser.press(args[0]);
@@ -480,11 +480,16 @@ export const COMMANDS: Record<string, Cmd> = {
       if (sub === "clear") { b.clearNetwork(); return "ok cleared"; }
       if (sub === "har") {
         const action = args[1] ?? "start";
-        if (action === "start") { b.clearNetwork(); return "ok HAR started"; }
+        if (action === "start") {
+          b.clearNetwork();
+          b.harPath = args[2] ? resolvePath(ctx.cwd, args[2]) : undefined;
+          return "ok HAR started";
+        }
         if (action === "stop") {
           const har = b.networkHar();
-          const out = resolvePath(ctx.cwd, args[2] ?? `network-${Date.now()}.har`);
+          const out = resolvePath(ctx.cwd, args[2] ?? b.harPath ?? `network-${Date.now()}.har`);
           writeFileSync(out, JSON.stringify(har, null, 1));
+          b.harPath = undefined;
           return `ok ${out} (${har.log.entries.length} entries)`;
         }
         throw new Error(`usage: ${this.usage}`);
@@ -594,16 +599,30 @@ COMMANDS.js = COMMANDS.eval;
 COMMANDS.scrollinto = COMMANDS.scrollintoview;
 COMMANDS.key = COMMANDS.press;
 
+export const EXTRA_USAGE: Record<string, string> = {
+  start: "start [--cdp URL|PORT] [--headful] [--profile DIR] [--block image,font]   start daemon explicitly (each --session NAME is its own browser; --profile DIR persists it)",
+  mcp: "mcp   run as an MCP server over stdio (same warm browser as the CLI)",
+  doctor: "doctor [--fix]   diagnose Chrome, state directory and config (no browser)",
+  skills: "skills list | skills get <name> | skills path [name]   version-matched agent skills",
+  "install-skill": "install-skill [--project | --dir DIR | --print]   install SKILL.md for coding agents",
+  stop: "stop [--all]   stop the current session (or all)",
+  status: "status   show the current session status",
+  sessions: "sessions   list running sessions",
+};
+
+/** Usage for a command (including special-cased ones), so `<cmd> --help` never runs the command. */
+export function usageFor(name: string): string | undefined {
+  const usage = COMMANDS[name]?.usage ?? EXTRA_USAGE[name];
+  return usage ? `usage: mb ${usage}` : undefined;
+}
+
 export function helpText() {
   const seen = new Set<Cmd>();
   const lines = ["monad-browser — headless browser for agents", "", "usage: mb [--session NAME] <command> [args]", "", "commands:"];
   for (const c of Object.values(COMMANDS)) { if (seen.has(c)) continue; seen.add(c); lines.push(`  ${c.usage}`); }
-  lines.push("  start [--cdp URL|PORT] [--headful] [--profile DIR] [--block image,font]   start daemon explicitly", "  mcp   run as an MCP server over stdio (same warm browser as the CLI)",
-    "  doctor [--fix]   diagnose Chrome, state directory and config (no browser)",
-    "  skills list | skills get <name> | skills path [name]   version-matched agent skills",
-    "  install-skill [--project | --dir DIR | --print]   install SKILL.md for coding agents",
-    "  stop [--all] | status | sessions   (each --session NAME is its own browser; --profile DIR persists it)");
-  lines.push("", "refs: snapshot assigns @N to interactive elements; refs stay stable while the element lives.");
+  for (const usage of new Set(Object.values(EXTRA_USAGE))) lines.push(`  ${usage}`);
+  lines.push("", "aliases: goto, navigate → open · snap → snapshot · js → eval · scrollinto → scrollintoview · key → press");
+  lines.push("refs: snapshot assigns @N to interactive elements; refs stay stable while the element lives.");
   return lines.join("\n");
 }
 
@@ -612,5 +631,6 @@ export async function dispatch(ctx: Ctx, argv: string[]): Promise<string> {
   const cmd = COMMANDS[name];
   if (!cmd) throw new Error(`unknown command: ${name}\n\n${helpText()}`);
   const { args, flags } = parseArgs(rest);
+  if (flags.help) return `usage: mb ${cmd.usage}`;
   return cmd.run(ctx, args, flags);
 }

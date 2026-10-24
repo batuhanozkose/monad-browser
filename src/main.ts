@@ -123,8 +123,20 @@ async function main() {
     break;
   }
   const cmd = argv[0];
-  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") { const { helpText } = await import("./commands.js"); console.log(helpText()); return; }
-  if (cmd === "--version" || cmd === "version") { console.log("monad-browser 0.1.0-alpha.0"); return; }
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
+    const { helpText, usageFor } = await import("./commands.js");
+    console.log(cmd === "help" && argv[1] ? usageFor(argv[1]) ?? helpText() : helpText());
+    return;
+  }
+  const helpArgs = argv.slice(1);
+  const dash = helpArgs.indexOf("--");
+  const wantsHelp = (dash < 0 ? helpArgs : helpArgs.slice(0, dash)).some((a) => a === "--help" || a === "-h");
+  if (wantsHelp) {
+    const { usageFor } = await import("./commands.js");
+    const usage = usageFor(cmd);
+    if (usage) { console.log(usage); return; }
+  }
+  if (cmd === "--version" || cmd === "version") { const { VERSION } = await import("./version.js"); console.log(`monad-browser ${VERSION}`); return; }
 
   if (cmd === "doctor") {
     const { doctor } = await import("./doctor.js");
@@ -135,9 +147,9 @@ async function main() {
     const { listSkills, getSkill, skillPath } = await import("./skill.js");
     const sub = argv[1] ?? "list";
     if (sub === "list") { console.log(listSkills()); return; }
-    if (sub === "get") { console.log(getSkill(argv[2] ?? "core", argv.includes("--full"))); return; }
+    if (sub === "get") { console.log(getSkill(argv[2] ?? "core")); return; }
     if (sub === "path") { console.log(skillPath(argv[2] ?? "core")); return; }
-    throw new Error("usage: mb skills list | mb skills get <name> [--full] | mb skills path [name]");
+    throw new Error("usage: mb skills list | mb skills get <name> | mb skills path [name]");
   }
   if (cmd === "read") {
     const { parseArgs } = await import("./commands.js");

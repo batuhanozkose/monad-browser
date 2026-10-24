@@ -1,8 +1,31 @@
 {
   "name": "monad-browser",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0",
   "description": "Headless, turnkey browser CLI for AI agents: compact AX snapshots with @refs, warm daemon, raw CDP. No Playwright.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/batuhanozkose/monad-browser.git"
+  },
+  "homepage": "https://github.com/batuhanozkose/monad-browser#readme",
+  "bugs": {
+    "url": "https://github.com/batuhanozkose/monad-browser/issues"
+  },
+  "keywords": [
+    "browser",
+    "browser-automation",
+    "cli",
+    "ai-agents",
+    "agents",
+    "chrome",
+    "chrome-devtools-protocol",
+    "cdp",
+    "headless",
+    "mcp",
+    "accessibility-tree",
+    "snapshot"
+  ],
+  "author": "Batuhan Özköse",
   "bin": {
     "monad-browser": "./dist/cli.js",
     "mb": "./bin/mb"

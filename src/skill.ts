@@ -20,8 +20,9 @@ A warm daemon keeps Chrome open between calls, so each command is ~40 ms.
 
 ## Read and query before snapshotting
 - \`mb read <url>\` fetches markdown / \`llms.txt\` without launching Chrome; \`mb read\` reads the active tab.
-  Add \`--outline\`, \`--filter <text>\`, or \`--require-md\`.
-- \`mb get text|value|attr|count|box|styles <target>\` reads one value instead of a whole snapshot.
+  For URLs, add \`--outline\`, \`--filter <text>\`, or \`--require-md\`.
+- \`mb get text|value|count|box|styles <target>\` reads one value instead of a whole snapshot;
+  \`mb get attr <target> <name>\` reads one attribute.
 - \`mb is visible|enabled|checked <target>\` answers a state question.
 - \`mb find label "Email" fill "a@b.com"\`, \`mb find role button click --name Submit\`,
   \`mb find placeholder "Search" fill "x"\`, \`mb find first ".item" click\`.
@@ -76,15 +77,15 @@ export function listSkills(): string {
   return Object.entries(SKILLS).map(([name, s]) => `${name}\t${s.description}`).join("\n");
 }
 
-export function getSkill(name = "core", full = false): string {
+export function getSkill(name = "core"): string {
   const skill = SKILLS[name];
   if (!skill) throw new Error(`unknown skill: ${name} (known: ${Object.keys(SKILLS).join(", ")})`);
-  return full ? skill.body : skill.body;
+  return skill.body;
 }
 
 export function skillPath(name = "core"): string {
   if (!SKILLS[name]) throw new Error(`unknown skill: ${name}`);
-  return join(homedir(), ".agents", "skills", `monad-browser-${name}`);
+  return join(homedir(), ".agents", "skills", "monad-browser");
 }
 
 export function installSkill(argv: string[]) {
