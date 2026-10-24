@@ -542,7 +542,8 @@ export const COMMANDS: Record<string, Cmd> = {
         const after = (await b.snapshotText(opts)).split("\n");
         let before: string[] | undefined;
         if (typeof flags.baseline === "string") {
-          before = readFileSync(resolvePath(ctx.cwd, flags.baseline), "utf8").split("\n");
+          // A baseline written on Windows (or edited there) has CRLF; normalize before diffing.
+          before = readFileSync(resolvePath(ctx.cwd, flags.baseline), "utf8").replace(/\r\n/g, "\n").split("\n");
           // A saved `mb snapshot` includes the "# title — url" header; the tree comparison does not.
           if (before[0]?.startsWith("# ") && before[0].includes(" — ")) before.shift();
         } else {

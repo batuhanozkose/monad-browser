@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CDP } from "./cdp.js";
-import { launchChrome, resolveCdpEndpoint, cleanupProfile, type LaunchedChrome } from "./chrome.js";
+import { launchChrome, resolveCdpEndpoint, cleanupProfile, killChrome, type LaunchedChrome } from "./chrome.js";
 import { renderDiff, treeChange, matchGlob, type TreeChange } from "./diff.js";
 import { takeSnapshot, newRefTable, elKey, DEFAULT_MAX_LINES, type El, type RefTable, type SnapshotOptions } from "./snapshot.js";
 import { KEYS, modifierBit } from "./keys.js";
@@ -198,7 +198,7 @@ export class Browser {
     on("Network.requestWillBeSent", (p) => {
       const now = Date.now();
       // A new top-level document cancels the old page's loads; their loadingFinished/Failed may never arrive.
-      if (p.type === "Document" && p.requestId === p.loaderId && !p.redirectResponse && p.frameId === tab.targetId) tab.inflight.clear();
+      if (p.type === "Document" && p.requestId === p.loaderId && !p.redirectResponse && (!tab.mainFrame || p.frameId === tab.mainFrame)) tab.inflight.clear();
       // Only loads that can still change the DOM gate settling; images, fonts, media and beacons do not.
       if (DOM_TYPES.has(p.type)) tab.inflight.set(p.requestId, now);
       if (DOM_TYPES.has(p.type)) tab.lastNet = now;
@@ -1174,15 +1174,21 @@ export class Browser {
   async download(target: string, dir: string, timeoutMs = 30_000) {
     mkdirSync(dir, { recursive: true });
     await this.cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: dir, eventsEnabled: true });
-    const tab = this.tab();
     let filename = "";
+    let guid = "";
     let cleanup = () => {};
     const done = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => { cleanup(); reject(new Error(`download did not finish in ${timeoutMs} ms`)); }, timeoutMs);
+      // Browser.downloadWillBegin is browser-wide; take the download this click started (the first
+      // event) and ignore another tab's. A frameId filter misses downloads that start in a child
+      // frame, which then fell back to the GUID instead of the suggested file name.
       const offBegin = this.cdp.on("Browser.downloadWillBegin", (p: any) => {
-        if (!p.frameId || p.frameId === tab.mainFrame) filename = p.suggestedFilename || filename;
+        if (guid && p.guid !== guid) return;
+        guid = p.guid;
+        filename = p.suggestedFilename || filename;
       });
       const offProgress = this.cdp.on("Browser.downloadProgress", (p: any) => {
+        if (guid && p.guid !== guid) return;
         if (p.state === "completed") { cleanup(); resolve(join(dir, filename || p.guid)); }
         else if (p.state === "canceled") { cleanup(); reject(new Error("download canceled")); }
       });
@@ -1487,7 +1493,7 @@ export class Browser {
     try { if (this.chrome?.proc) await this.cdp.send("Browser.close").catch(() => {}); } catch { /* ignore */ }
     this.cdp?.close();
     if (this.chrome?.proc && this.chrome.proc.exitCode === null) {
-      await new Promise((r) => { const t = setTimeout(() => { this.chrome!.proc!.kill("SIGKILL"); r(null); }, 2000); this.chrome!.proc!.once("exit", () => { clearTimeout(t); r(null); }); });
+      await new Promise((r) => { const t = setTimeout(() => { killChrome(this.chrome!.proc!); r(null); }, 2000); this.chrome!.proc!.once("exit", () => { clearTimeout(t); r(null); }); });
     }
     this.chrome?.relay?.close();
     if (this.chrome?.ephemeral) cleanupProfile(this.chrome.userDataDir);

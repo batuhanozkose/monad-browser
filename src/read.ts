@@ -87,7 +87,10 @@ export function htmlToText(html: string, opts: { outline?: boolean } = {}): stri
   let body = html
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<(script|style|noscript|svg|template|canvas)\b[\s\S]*?<\/\1>/gi, "")
-    .replace(/<(nav|header|footer|aside|form|button|select|textarea)\b[\s\S]*?<\/\1>/gi, "");
+    // A <header> inside <main>/<article> usually holds the page's <h1> (Wikipedia, news sites);
+    // a site-chrome header does not. Strip the wrapper, keep the heading.
+    .replace(/<header\b[^>]*>([\s\S]*?)<\/header>/gi, (_, inner: string) => /<h1\b/i.test(inner) ? inner : "")
+    .replace(/<(nav|footer|aside|form|button|select|textarea)\b[\s\S]*?<\/\1>/gi, "");
 
   // Prefer the page's main content when the site marks it up.
   const main = /<main\b[^>]*>([\s\S]*?)<\/main>/i.exec(body)?.[1]

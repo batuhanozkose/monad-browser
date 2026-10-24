@@ -63,6 +63,10 @@ the error names the cover — close it first.
 - Logins: \`mb state save auth.json\` once, then \`mb state load auth.json\` in a fresh session.
 - Parallel browsers: \`mb --session work open …\`; \`mb sessions\`; \`mb stop --all\`.
 - Attach to an existing Chrome: \`mb --cdp 9222 open …\`. Visible window: \`mb --headful open …\`.
+
+## Windows
+\`mb\` runs on Node there (the Go thin client is Linux/macOS only). In PowerShell, prefer
+\`mb run --file plan.js\` over inline single-quoted scripts; every other command is identical.
 `;
 
 /** Skills shipped with the CLI, so an agent's instructions always match the installed version. */

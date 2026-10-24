@@ -32,6 +32,22 @@ test("run executes a multi-step plan in one call", { skip }, () => {
   assert.equal(out, "Hello Ada / pro / true");
 });
 
+test("run stops acting after its timeout", { skip }, () => {
+  mb("open", `${F}/form.html`);
+  assert.throws(
+    () => mb("run", `await new Promise(r => setTimeout(r, 1500)); await goto("https://example.com");`, "--timeout", "300"),
+    /run timed out/,
+  );
+  // The plan wakes up after the timeout; it must not navigate behind the caller's back.
+  execFileSync(process.execPath, ["-e", "setTimeout(() => {}, 1800)"], { env });
+  assert.equal(mb("get", "title"), "Fixture Form");
+  mb("snapshot", "-i"); // opening a page resets refs; the next tests rely on @6/@2
+});
+
+test("global --config only applies before the command", { skip }, () => {
+  assert.equal(mb("run", "return 1", "--config", "/nonexistent"), "1");
+});
+
 test("refs self-heal after re-render", { skip }, () => {
   mb("eval", `const b=document.querySelector("form button"); b.replaceWith(b.cloneNode(true)); return 1`);
   assert.match(mb("click", "@6"), /ok clicked/);
@@ -332,6 +348,10 @@ test("diff url and baseline file", { skip }, async () => {
   mb("open", `${F}/form.html`);
   writeFileSync(base, mb("snapshot", "-i"));
   assert.match(mb("diff", "snapshot", "-i", "--baseline", base), /no changes/);
+  // A baseline written on Windows has CRLF; normalize it instead of reporting every line as changed.
+  const crlf = join(dir, "base-crlf.txt");
+  writeFileSync(crlf, mb("snapshot", "-i").replace(/\n/g, "\r\n"));
+  assert.match(mb("diff", "snapshot", "-i", "--baseline", crlf), /no changes/);
   assert.match(mb("diff", "url", `${F}/form.html`, `${F}/labels.html`, "-i"), /\+\d+ -\d+/);
 });
 

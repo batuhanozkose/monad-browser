@@ -11,11 +11,15 @@ export async function runScript(browser: Browser, code: string, cwd: string, tim
   const out: string[] = [];
   let step = 0;
   let lastStep = "";
+  let aborted = false;
+  const onAbort = () => { aborted = true; };
+  signal?.addEventListener("abort", onAbort, { once: true });
   const fmt = (v: unknown) => (typeof v === "string" ? v : v === undefined ? "undefined" : JSON.stringify(v, null, 0));
   const track = <F extends (...a: any[]) => Promise<any>>(name: string, fn: F): F =>
     (async (...a: any[]) => {
-      // Cooperative cancellation: the client hung up, so stop before the next step instead of running the whole plan.
-      if (signal?.aborted) throw new Error("aborted: client disconnected");
+      // Cooperative cancellation: the client hung up or the script timed out, so stop before the
+      // next step instead of continuing to click and type after the caller got its error.
+      if (aborted || signal?.aborted) throw new Error("aborted: run stopped");
       step++;
       lastStep = `${name}(${a.map((x) => JSON.stringify(x)).join(", ").slice(0, 80)})`;
       return fn(...a);
@@ -148,7 +152,7 @@ export async function runScript(browser: Browser, code: string, cwd: string, tim
   try {
     const result = await Promise.race([
       new vm.Script(wrapped, { filename: "run.js" }).runInContext(context),
-      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`run timed out after ${timeoutMs} ms`)), timeoutMs); }),
+      new Promise((_, rej) => { timer = setTimeout(() => { aborted = true; rej(new Error(`run timed out after ${timeoutMs} ms`)); }, timeoutMs); }),
     ]);
     if (result !== undefined) out.push(fmt(result));
     return out.join("\n") || "ok";
@@ -159,6 +163,7 @@ export async function runScript(browser: Browser, code: string, cwd: string, tim
     throw err;
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 

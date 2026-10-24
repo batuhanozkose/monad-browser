@@ -26,7 +26,7 @@ export async function startDaemon(session: string, launchArgv: string[]) {
   const log = openSync(logPath, "a");
   const self = cliPath();
   const child = spawn(process.execPath, [self, "__daemon", session, ...launchArgv], {
-    detached: true, stdio: ["ignore", log, log, "ipc"], env: process.env,
+    detached: true, stdio: ["ignore", log, log, "ipc"], env: process.env, windowsHide: true,
   });
   const tail = () => {
     try { return readFileSync(logPath, "utf8").trim().split("\n").slice(-25).join("\n"); }
@@ -35,9 +35,12 @@ export async function startDaemon(session: string, launchArgv: string[]) {
   await new Promise<void>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`daemon did not start in 30s — see ${logPath}${tail() ? `\n${tail()}` : ""}`)), 30_000);
     child.once("message", () => { clearTimeout(t); resolve(); });
+    child.once("error", (e) => { clearTimeout(t); reject(e); });
     child.once("exit", (code) => {
       clearTimeout(t);
-      reject(new Error(`daemon exited (${code}) — see ${logPath}${tail() ? `\n${tail()}` : ""}`));
+      // 0 means another daemon won the session lock; the caller reconnects to it.
+      if (code === 0) resolve();
+      else reject(new Error(`daemon exited (${code}) — see ${logPath}${tail() ? `\n${tail()}` : ""}`));
     });
   });
   child.disconnect();

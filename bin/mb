@@ -1,19 +1,22 @@
-#!/bin/sh
-# Fallback launcher. `npm install` normally replaces this file with the native client
-# (scripts/postinstall.mjs); if it did not, use the native binary when present, else Node.
-# Resolve symlinks so a global install (prefix/bin/mb -> lib/node_modules/.../bin/mb) works.
-self=$0
-while [ -L "$self" ]; do
-  target=$(readlink "$self")
-  case "$target" in
-    /*) self=$target ;;
-    *) self=$(dirname "$self")/$target ;;
-  esac
-done
-d=$(cd "$(dirname "$self")" && pwd -P)
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) b=mb-linux-amd64 ;; Linux-aarch64|Linux-arm64) b=mb-linux-arm64 ;;
-  Darwin-x86_64) b=mb-darwin-amd64 ;; Darwin-arm64) b=mb-darwin-arm64 ;; *) b= ;;
-esac
-[ -n "$b" ] && [ -x "$d/native/$b" ] && exec "$d/native/$b" "$@"
-exec node "$d/../dist/cli.js" "$@"
+#!/usr/bin/env node
+// Fallback launcher. On Linux/macOS `npm install` normally replaces this file with the native
+// thin client (scripts/postinstall.mjs). When it does not — Windows, --ignore-scripts, or an
+// architecture without a build — run the packaged native binary if there is one, else Node.
+// Node resolves a global symlink (prefix/bin/mb -> .../monad-browser/bin/mb) before this runs;
+// realpath keeps the paths correct under --preserve-symlinks-main too.
+import { spawnSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const root = dirname(dirname(realpathSync(fileURLToPath(import.meta.url))));
+const { nativeBinaryPath } = await import(pathToFileURL(join(root, "scripts", "native-name.mjs")).href);
+const native = nativeBinaryPath(root, process.platform, process.arch);
+
+if (native && existsSync(native)) {
+  const r = spawnSync(native, process.argv.slice(2), { stdio: "inherit" });
+  // A stale or incompatible binary must not break the CLI: fall through to Node instead.
+  if (!r.error) process.exit(r.status ?? 1);
+}
+
+await import(pathToFileURL(join(root, "dist", "cli.js")).href);

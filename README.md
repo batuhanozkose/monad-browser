@@ -38,7 +38,8 @@ mb stop
 ```
 
 The first command launches Chrome and a per-session daemon; every command after that is a single
-unix-socket round trip, so a warm `mb` call costs roughly 40 ms.
+local-socket round trip (a unix socket, or a named pipe on Windows), so a warm `mb` call costs
+roughly 40 ms.
 
 ## Quick start
 
@@ -58,8 +59,12 @@ npm link               # put `mb` on your PATH
 ```
 
 > Chrome or Chromium must be installed. `mb` finds the usual locations; point it elsewhere with
-> `MONAD_CHROME=/path/to/chrome`. `npm run build:native` is optional — it compiles the Go thin
-> client for a faster hot path.
+> `MONAD_CHROME=/path/to/chrome` (a bare command name such as `chrome` also works).
+> `npm run build:native` is optional — it compiles the Go thin client for a faster hot path.
+>
+> On Windows, `mb` runs on Node (the Go thin client is built for Linux/macOS); Chrome, Edge or
+> Chromium is found automatically. Installs with `--ignore-scripts` work the same way, so npm 12's
+> default script policy does not break the launcher.
 
 A real session — open Hacker News, list the interactive elements, follow one story:
 
@@ -202,8 +207,8 @@ sequenceDiagram
 ```
 
 - **Thin client.** On Linux/macOS a small Go binary ([`native/`](native/)) forwards the command over
-  a unix socket — one round trip, no Node start-up (~6 ms vs ~55 ms). Everything else (starting the
-  daemon, `mcp`, `install-skill`, help, Windows) falls back to Node.
+  a unix socket (a named pipe on Windows) — one round trip, no Node start-up (~6 ms vs ~55 ms).
+  Everything else (starting the daemon, `mcp`, `install-skill`, help, Windows) falls back to Node.
 - **Daemon.** Starts Chrome on first use, keeps one browser per session, exits after
   `MONAD_IDLE_MINUTES` (default 30) of inactivity.
 - **Snapshot.** Accessibility tree merged with `DOMSnapshot` layout; hidden nodes are dropped;
@@ -422,7 +427,9 @@ A page opened and captured with `mb open` + `mb screenshot`:
 - **`diff` covers snapshots and URLs, not pixels.** `diff screenshot` is not implemented.
 - **`set device` ships a small preset table** (Desktop, iPhone 15/SE, Pixel 7, iPad); use
   `set viewport` for anything else.
-- **Windows** works, but without the native thin client (Node start-up per command).
+- **Windows** runs on the Node launcher (the Go thin client is built for Linux/macOS); npm 12's
+  default install-script policy is fine because `bin/mb` is a Node script that finds the packaged
+  native binary itself.
 
 ## Development
 
@@ -433,8 +440,10 @@ npm run build:native   # cross-compile the Go client into bin/native/
 npm test               # build + unit & e2e tests (node --test)
 ```
 
-CI runs typecheck, build, unit + e2e tests on Node 22 and `go vet` + `go build` for the native
-client ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark harness is in
+CI runs typecheck, build and unit + e2e tests on Ubuntu, macOS arm64 and macOS x64, plus Windows;
+the Windows job also runs `npm pack` and a global install with `--ignore-scripts`, then
+`mb --version` and `mb doctor`. The native Go client is vetted and built separately
+([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark harness is in
 [`bench/`](bench/) (`node bench.mjs <tool>`, `node scripts.mjs <tool>`, `node fidelity.mjs`,
 `node report.mjs`).
 

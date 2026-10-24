@@ -2,7 +2,7 @@
 // socket/pid files left by a daemon that was killed.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { findChrome } from "./chrome.js";
 import { stateDir } from "./paths.js";
 
@@ -16,13 +16,22 @@ export function doctor(fix = false): string {
   lines.push(major >= 22 ? ok(`Node ${process.versions.node}`) : fail(`Node ${process.versions.node} (need >= 22)`));
 
   const chrome = findChrome();
-  if (!chrome) lines.push(fail("Chrome/Chromium not found (set MONAD_CHROME or install Chrome)"));
+  if (!chrome) lines.push(fail("Chrome/Chromium not found (set MONAD_CHROME or install Chrome, Edge or Chromium)"));
   else {
-    lines.push(ok(`Chrome ${chrome}`));
-    try {
-      const v = execFileSync(chrome, ["--version"], { encoding: "utf8", timeout: 5000 }).trim();
-      lines.push(info(v));
-    } catch { lines.push(info("could not read the Chrome version")); }
+    lines.push(ok(`Chrome/Chromium ${chrome}`));
+    if (process.platform === "win32") {
+      // chrome.exe is a GUI binary: --version can open a window. Read the versioned application
+      // subdirectory instead of launching it.
+      try {
+        const v = readdirSync(dirname(chrome)).filter((n) => /^\d+\./.test(n)).sort().at(-1);
+        lines.push(v ? info(`Chrome ${v}`) : info("version check skipped on Windows"));
+      } catch { lines.push(info("version check skipped on Windows")); }
+    } else {
+      try {
+        const v = execFileSync(chrome, ["--version"], { encoding: "utf8", timeout: 5000, windowsHide: true }).trim();
+        lines.push(info(v));
+      } catch { lines.push(info("could not read the Chrome version")); }
+    }
   }
 
   const dir = stateDir();
@@ -33,6 +42,8 @@ export function doctor(fix = false): string {
     const alive = (name: string) => {
       try {
         const pid = Number(readFileSync(join(dir, `${name}.pid`), "utf8").trim());
+        // PID 0 means "the current process group" to process.kill, not a dead daemon.
+        if (!Number.isInteger(pid) || pid <= 0) return false;
         process.kill(pid, 0);
         return true;
       } catch { return false; }
@@ -54,10 +65,12 @@ export function doctor(fix = false): string {
     }
   }
 
-  try {
-    const st = statSync(dir);
-    lines.push(ok(`state directory permissions ${(st.mode & 0o777).toString(8)}`));
-  } catch { /* missing is already reported */ }
+  if (process.platform !== "win32") {
+    try {
+      const st = statSync(dir);
+      lines.push(ok(`state directory permissions ${(st.mode & 0o777).toString(8)}`));
+    } catch { /* missing is already reported */ }
+  }
 
   const cfg = join(process.cwd(), "monad-browser.json");
   lines.push(existsSync(cfg) ? ok(`project config ${cfg}`) : info("no project config (optional)"));

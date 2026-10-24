@@ -1,7 +1,7 @@
 // Thin client: forwards argv to the session daemon, starting it on first use.
 // Only paths + client load on the hot path; the browser, commands and MCP code load lazily.
 import { existsSync, readdirSync } from "node:fs";
-import { socketPath, stateDir } from "./paths.js";
+import { assertSession, socketPath, stateDir } from "./paths.js";
 import { request, startDaemon, notListening } from "./client.js";
 import { loadConfig, type Config } from "./config.js";
 
@@ -93,9 +93,16 @@ async function main() {
     return;
   }
 
-  // Config may be selected before the command; CLI flags still win over its values.
+  // Config may be selected before the command; CLI flags still win over its values. Stop at the
+  // first non-option so a command's own `--config` argument is not mistaken for the global one.
   let configPath: string | undefined;
-  for (let i = 0; i < argv.length; i++) if (argv[i] === "--config") { configPath = argv[i + 1]; break; }
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--" || !a.startsWith("--")) break;
+    const [k, v] = a.slice(2).split("=", 2);
+    if (k === "config") { configPath = v ?? argv[i + 1]; break; }
+    if (v === undefined && (k === "session" || (LAUNCH_FLAGS.has(k) && !BOOL_LAUNCH.has(k)))) i++;
+  }
   const cfg = loadConfig(process.cwd(), configPath);
   if (cfg.noSandbox) process.env.MONAD_NO_SANDBOX = "1";
   if (cfg.snapshotCacheMs !== undefined) process.env.MONAD_SNAPSHOT_CACHE_MS = String(cfg.snapshotCacheMs);
@@ -122,6 +129,7 @@ async function main() {
     }
     break;
   }
+  assertSession(session);
   const cmd = argv[0];
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
     const { helpText, usageFor } = await import("./commands.js");
