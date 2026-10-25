@@ -24,4 +24,4 @@ conditions:
   changed | contains "x" | not-contains "x" | matches /re/ | > 10 | >= 10 | < 5 | <= 5 | == 0 | != 0
 
 state: ~/.monad-browser/watches.json (MONAD_HOME overrides). The daemon timer keeps running
-between CLI calls; mb watch run is the foreground alternative. Plain text, no ANSI; --json is stable.`;
+between CLI calls; mb watch run is the foreground alternative. Plain text when piped; --json is stable.`;

@@ -4,6 +4,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { assertSession, socketPath, stateDir } from "./paths.js";
 import { request, startDaemon, notListening } from "./client.js";
 import { loadConfig, type Config } from "./config.js";
+import { paint, uiFor } from "./ui/color.js";
+import { renderAction, renderDoctor, renderError, renderOutput, renderSessions } from "./ui/render.js";
 
 const LAUNCH_FLAGS = new Set([
   "cdp", "headful", "profile", "block", "chrome", "idle", "proxy", "headers", "user-agent",
@@ -11,6 +13,17 @@ const LAUNCH_FLAGS = new Set([
   "args", "no-auto-dialog",
 ]);
 const BOOL_LAUNCH = new Set(["headful", "ignore-https-errors", "no-auto-dialog"]);
+const STDOUT_UI = uiFor(process.stdout);
+const STDERR_UI = uiFor(process.stderr);
+
+/** --json is a contract: never let the TTY renderer touch it. */
+function wantsJson(argv: string[]): boolean {
+  for (const a of argv) {
+    if (a === "--") break;
+    if (a === "--json" || a.startsWith("--json=")) return true;
+  }
+  return false;
+}
 
 const splitList = (v: unknown) => typeof v === "string" ? v.split(/[,\n]/).map((s) => s.trim()).filter(Boolean) : [];
 
@@ -134,23 +147,32 @@ async function main() {
   assertSession(session);
   const cmd = argv[0];
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") {
-    const { helpText, usageFor } = await import("./commands.js");
-    console.log(cmd === "help" && argv[1] ? usageFor(argv[1]) ?? helpText() : helpText());
+    const { allHelp, commandHelp, topHelp } = await import("./help.js");
+    if ((cmd === "help" || cmd === "--help") && (argv[1] === "--all" || argv.includes("--all"))) {
+      console.log(allHelp(STDOUT_UI));
+      return;
+    }
+    if (cmd === "help" && argv[1]) {
+      const help = commandHelp(argv[1], STDOUT_UI);
+      if (help) { console.log(help); return; }
+      throw new Error(`unknown command: ${argv[1]}\n\nRun mb help --all for every command.`);
+    }
+    console.log(topHelp(STDOUT_UI));
     return;
   }
   const helpArgs = argv.slice(1);
   const dash = helpArgs.indexOf("--");
   const wantsHelp = (dash < 0 ? helpArgs : helpArgs.slice(0, dash)).some((a) => a === "--help" || a === "-h");
   if (wantsHelp) {
-    const { usageFor } = await import("./commands.js");
-    const usage = usageFor(cmd);
-    if (usage) { console.log(usage); return; }
+    const { commandHelp } = await import("./help.js");
+    const help = commandHelp(cmd, STDOUT_UI);
+    if (help) { console.log(help); return; }
   }
   if (cmd === "--version" || cmd === "version") { const { VERSION } = await import("./version.js"); console.log(`monad-browser ${VERSION}`); return; }
 
   if (cmd === "doctor") {
-    const { doctor } = await import("./doctor.js");
-    console.log(doctor(argv.includes("--fix")));
+    const { doctor, doctorReport } = await import("./doctor.js");
+    console.log(STDOUT_UI ? renderDoctor(doctorReport(argv.includes("--fix")), STDOUT_UI) : doctor(argv.includes("--fix")));
     return;
   }
   if (cmd === "skills") {
@@ -179,7 +201,7 @@ async function main() {
 
   if (cmd === "watch") {
     const { runWatchCommand } = await import("./watch-cli.js");
-    const result = await runWatchCommand(argv.slice(1), { cwd: process.cwd() });
+    const result = await runWatchCommand(argv.slice(1), { cwd: process.cwd(), ui: wantsJson(argv) ? undefined : STDOUT_UI });
     if (result.out) process.stdout.write(result.out.endsWith("\n") ? result.out : result.out + "\n");
     if (result.exitCode !== undefined) process.exitCode = result.exitCode;
     if (result.startDaemon) {
@@ -198,17 +220,26 @@ async function main() {
 
   if (cmd === "mcp") { const { runMcp } = await import("./mcp.js"); await runMcp(session, launch); return; }
   if (cmd === "install-skill") { const { installSkill } = await import("./skill.js"); console.log(installSkill(argv.slice(1))); return; }
-  if (cmd === "sessions") { console.log(await listSessions()); return; }
+  if (cmd === "sessions") {
+    const text = await listSessions();
+    console.log(STDOUT_UI ? renderSessions(text, STDOUT_UI) : text);
+    return;
+  }
   if (cmd === "stop" && argv[1] === "--all") {
-    for (const s of await liveSessions()) { await request(s, ["stop"], 5000).catch(() => {}); console.log(`ok stopped ${s}`); }
+    for (const s of await liveSessions()) {
+      await request(s, ["stop"], 5000).catch(() => {});
+      const out = `ok stopped ${s}`;
+      console.log(STDOUT_UI ? renderAction(out, STDOUT_UI) : out);
+    }
     return;
   }
   const alive = async () => { try { await request(session, ["status"], 3000); return true; } catch { return false; } };
   if (cmd === "start") {
     const rest = argv.slice(1);
-    if (await alive()) { console.log(`already running (session ${session})`); return; }
+    if (await alive()) { console.log(STDOUT_UI ? paint(STDOUT_UI, `already running (session ${session})`, "dim") : `already running (session ${session})`); return; }
     await startDaemon(session, [...launch, ...rest]);
-    console.log(`ok started session ${session}`);
+    const out = `ok started session ${session}`;
+    console.log(STDOUT_UI ? renderAction(out, STDOUT_UI) : out);
     return;
   }
   if (cmd === "run" && (argv[1] === "-" || (argv.length === 1 && !process.stdin.isTTY))) {
@@ -223,13 +254,30 @@ async function main() {
   catch (e) {
     // status/stop are lifecycle questions: a daemon that vanished between connect and write
     // (EPIPE on an idle shutdown) is simply not running.
-    if (cmd === "stop" || cmd === "status") { console.log(cmd === "stop" ? "not running" : "stopped"); return; }
+    if (cmd === "stop" || cmd === "status") {
+      const out = cmd === "stop" ? "not running" : "stopped";
+      console.log(STDOUT_UI ? paint(STDOUT_UI, out, "dim") : out);
+      return;
+    }
     if (!notListening(e)) throw e;
     await startDaemon(session, launch);
     res = await request(session, argv, timeout);
   }
-  if (res.ok) { if (res.out) process.stdout.write(res.out.endsWith("\n") ? res.out : res.out + "\n"); }
-  else { process.stderr.write(`error: ${res.error}\n`); process.exitCode = 1; }
+  if (res.ok) {
+    if (res.out) {
+      const out = STDOUT_UI && !wantsJson(argv) ? renderOutput(cmd, argv, res.out, STDOUT_UI, res.ms) : res.out;
+      process.stdout.write(out.endsWith("\n") ? out : out + "\n");
+    }
+  } else {
+    const out = STDERR_UI ? renderError(cmd, res.error ?? "unknown error", STDERR_UI) : `error: ${res.error}`;
+    process.stderr.write(out.endsWith("\n") ? out : out + "\n");
+    process.exitCode = 1;
+  }
 }
 
-main().catch((e) => { process.stderr.write(`error: ${e?.message ?? e}\n`); process.exit(1); });
+main().catch((e) => {
+  const message = e?.message ?? String(e);
+  const out = STDERR_UI ? renderError(undefined, message, STDERR_UI) : `error: ${message}`;
+  process.stderr.write(out.endsWith("\n") ? out : out + "\n");
+  process.exit(1);
+});

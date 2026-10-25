@@ -317,6 +317,27 @@ JSON as `--headers "{\"a\":\"b\"}"`, and prefer single quotes inside `run` scrip
 (`mb run "return 'a;b'"`) or `mb run --file plan.js` when a script mixes both quote styles or has
 newlines. Unknown `--flags` are rejected rather than silently ignored.
 
+## Output and color
+
+`mb` keeps two contracts. On a TTY it renders a semantic layer: refs are cyan, URLs blue, numbers
+magenta, success green, errors red and warnings yellow. In a pipe, in CI, with `TERM=dumb`, or with
+`--json`, the same command prints the plain text agents and scripts already parse. `NO_COLOR`
+disables SGR without changing the layout; `FORCE_COLOR=1` opts a non-TTY stream into the human
+renderer. The palette is 16-color SGR, so it follows the terminal theme instead of hard-coding
+truecolor.
+
+`mb --help` is a compact command map. `mb help --all` lists every command, and
+`mb <command> --help` shows that command's flags, examples and platform notes. Snapshots keep the
+same tree and never get a box; prose wraps to the terminal width (80/100 columns, narrower windows
+fall back to a single column). Actions print a one-line receipt and, with `-s`, only the changed
+lines. Errors are three lines: what failed, why, and the next command to run. `mb doctor` uses a
+PASS/INFO table.
+
+Windows legacy consoles can be on a non-UTF-8 code page, so UI glyphs default to ASCII there.
+`MB_ASCII=1` forces ASCII everywhere; `MB_UNICODE=1` forces Unicode; `MB_WIDTH=N` pins the layout
+width for tests or unusual multiplexers. The ASCII set never changes meaning: `ok`/`ERR`, `->`,
+`PASS`/`INFO`/`FAIL`.
+
 ## Command reference
 
 | Command | What it does |
@@ -353,6 +374,7 @@ newlines. Unknown `--flags` are rejected rather than silently ignored.
 | `block <image,font,media,stylesheet\|none>` | block resource types for new tabs |
 | `url` · `cdp <Domain.method> [json]` | current title/url · raw CDP on the current tab |
 | `run '<js>' \| run --file f.js \| run -` | one-turn multi-step plan |
+| `help [--all\|<command>]` | compact command map · full list · flags and examples |
 | `mcp` | run as an MCP server over stdio |
 | `doctor [--fix]` · `skills list\|get\|path` | diagnostics · version-matched agent skills |
 | `install-skill [--project \| --dir D \| --print]` | write `SKILL.md` for coding agents |
@@ -445,9 +467,10 @@ from a failed check; `mb watch list` and `mb watch logs` show the last error and
 
 ### Output and JSON
 
-Text output is plain, has no ANSI escapes, and is identical on a TTY and a pipe; `NO_COLOR` needs
-nothing to disable. A fire prints the timestamp, source, a line diff (using the existing
-`diff.ts`), and the previous/next value. Nothing is printed when a condition does not fire.
+A fire prints the timestamp, source, a line diff (using the existing `diff.ts`), and the
+previous/next value. Nothing is printed when a condition does not fire. On a TTY the list, check,
+logs and fire lines use the same semantic palette as the rest of `mb`; pipes, CI and `--json` stay
+plain, byte-for-byte stable.
 
 `--json` is the stable machine contract:
 
@@ -531,6 +554,11 @@ mb install-skill --print      # stdout
 | `MONAD_SCREENSHOT_FORMAT` | `png` | `png` or `jpeg` |
 | `MONAD_SCREENSHOT_QUALITY` | `70` | JPEG quality |
 | `MONAD_DOWNLOAD_PATH` | `downloads` | default directory for `mb download` |
+| `NO_COLOR` | – | non-empty disables SGR; layout and text stay the same |
+| `FORCE_COLOR` | – | `1` forces the human renderer on a non-TTY stream; `--json` still wins |
+| `MB_ASCII` | – | `1` uses ASCII UI glyphs (`ok`, `ERR`, `->`, `PASS`) |
+| `MB_UNICODE` | auto | `1`/`0` overrides Unicode glyph detection (Windows defaults to ASCII) |
+| `MB_WIDTH` | terminal | pins the layout width (40–120); useful for tests and narrow panes |
 
 ## Screenshots
 
@@ -582,7 +610,7 @@ npm run test:matrix    # every command through bash/pwsh/cmd against real Chrome
 
 CI runs typecheck, build and unit + e2e tests on Ubuntu, macOS arm64 and macOS x64, plus Windows;
 the Windows job also runs `npm pack` and a global install with `--ignore-scripts`, then
-`mb --version` and `mb doctor`. A separate matrix job runs all 60 commands and 45 subcommands
+`mb --version` and `mb doctor`. A separate matrix job runs a 259-step matrix across 60 commands and 45 subcommands
 through bash, pwsh and cmd (cmd on Windows only) on Linux, Windows and macOS against real Chrome.
 The native Go client is vetted and built separately
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark harness is in

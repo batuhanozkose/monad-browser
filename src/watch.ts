@@ -1058,6 +1058,10 @@ export type ForegroundOptions = {
   render?: RenderFn;
   signal?: AbortSignal;
   pollMs?: number;
+  /** TTY formatters; undefined keeps the plain contract. */
+  format?: (o: CheckOutcome) => string;
+  formatError?: (o: CheckOutcome) => string;
+  formatStatus?: (s: string) => string;
 };
 
 /** Foreground loop for CI/systemd. Prints only fired events (JSONL with --json). */
@@ -1082,30 +1086,31 @@ export async function runWatchForeground(opts: ForegroundOptions = {}): Promise<
   });
   const stderr = (s: string) => process.stderr.write(s.endsWith("\n") ? s : s + "\n");
   const stdout = (s: string) => process.stdout.write(s.endsWith("\n") ? s : s + "\n");
+  const say = (s: string) => stderr(opts.formatStatus ? opts.formatStatus(s) : s);
   const show = (o: CheckOutcome) => {
     if (o.fired) {
       if (opts.json) stdout(JSON.stringify(publicOutcome(o)));
-      else stdout(formatFire(o));
+      else stdout(opts.format ? opts.format(o) : formatFire(o));
     } else if (!o.ok) {
       if (opts.json) stdout(JSON.stringify(publicOutcome(o)));
-      else stderr(formatCheckError(o));
+      else stderr(opts.formatError ? opts.formatError(o) : formatCheckError(o));
     }
   };
   try {
     const { file, warning } = readWatchFile();
-    if (warning) stderr(`warning: ${warning}`);
+    if (warning) say(`warning: ${warning}`);
     const active = file.watches.filter((w) => w.enabled).length;
-    if (!active) { stderr("no watchers"); return 0; }
-    stderr(`watching ${active} watcher(s) — Ctrl-C to stop`);
+    if (!active) { say("no watchers"); return 0; }
+    say(`watching ${active} watcher(s) — Ctrl-C to stop`);
     while (!ac.signal.aborted) {
-      if (!hasEnabledWatches()) { stderr("no watchers left; stopping"); break; }
+      if (!hasEnabledWatches()) { say("no watchers left; stopping"); break; }
       let due: Watch[] = [];
       try { due = await claimDueWatches(); }
-      catch (e: any) { stderr(`watch: ${e?.message ?? e}`); }
+      catch (e: any) { say(`watch: ${e?.message ?? e}`); }
       for (const w of due) {
         if (ac.signal.aborted) break;
         try { show(await checkAndApply(w, { render: opts.render })); }
-        catch (e: any) { stderr(`watch ${w.name}: ${e?.message ?? e}`); }
+        catch (e: any) { say(`watch ${w.name}: ${e?.message ?? e}`); }
       }
       if (!ac.signal.aborted) await wait(opts.pollMs ?? 1000);
     }

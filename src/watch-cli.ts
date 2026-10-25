@@ -4,6 +4,8 @@
 import { parseArgs } from "./commands.js";
 import type { Browser } from "./browser.js";
 import { WATCH_HELP } from "./watch-usage.js";
+import { paint, type Ui } from "./ui/color.js";
+import { renderWatchAdd, renderWatchError, renderWatchFire, renderWatchList, renderWatchLogs, renderWatchRemove, renderWatchRunStart } from "./ui/watch.js";
 import {
   addWatch, checkWatches, formatCheckError, formatDuration, formatFire, iso,
   publicEvent, publicOutcome, publicWatch, readLogs, readWatchFile, removeWatch,
@@ -11,6 +13,7 @@ import {
 } from "./watch.js";
 
 export type WatchCommandResult = { out?: string; startDaemon?: boolean; exitCode?: number };
+type Opts = { cwd: string; ui?: Ui };
 
 function str(flags: Record<string, string | boolean>, key: string): string | undefined {
   const v = flags[key];
@@ -79,7 +82,7 @@ function checkText(result: { fired: CheckOutcome[] }): string {
   return result.fired.map(formatFire).join("\n\n");
 }
 
-export async function runWatchCommand(argv: string[], opts: { cwd: string }): Promise<WatchCommandResult> {
+export async function runWatchCommand(argv: string[], opts: Opts): Promise<WatchCommandResult> {
   const sub = argv[0];
   const rest = argv.slice(1);
   if (!sub) throw new Error(WATCH_HELP);
@@ -110,7 +113,7 @@ export async function runWatchCommand(argv: string[], opts: { cwd: string }): Pr
       }, { render: renderer.render });
       const out = json
         ? JSON.stringify({ watch: publicWatch(result.watch), check: publicOutcome(result.outcome) })
-        : addText(result.watch, result.outcome);
+        : opts.ui ? renderWatchAdd(result.watch, result.outcome, opts.ui) : addText(result.watch, result.outcome);
       return { out, startDaemon: true };
     } finally {
       await renderer.close();
@@ -121,7 +124,7 @@ export async function runWatchCommand(argv: string[], opts: { cwd: string }): Pr
     if (args.length) throw new Error("usage: mb watch list [--json]");
     const { file, warning } = readWatchFile();
     if (warning) process.stderr.write(`warning: ${warning}\n`);
-    const out = json ? JSON.stringify({ watches: file.watches.map(publicWatch) }) : listText(file.watches);
+    const out = json ? JSON.stringify({ watches: file.watches.map(publicWatch) }) : opts.ui ? renderWatchList(file.watches, opts.ui) : listText(file.watches);
     return { out };
   }
 
@@ -140,9 +143,9 @@ export async function runWatchCommand(argv: string[], opts: { cwd: string }): Pr
         });
         return { out, exitCode: result.errors.length ? 1 : 0 };
       }
-      for (const e of result.errors) process.stderr.write(formatCheckError(e) + "\n");
+      for (const e of result.errors) process.stderr.write((opts.ui ? renderWatchError(e, opts.ui) : formatCheckError(e)) + "\n");
       if (result.skipped.length) process.stderr.write(`already checking: ${result.skipped.join(", ")}\n`);
-      return { out: checkText(result), exitCode: result.errors.length ? 1 : 0 };
+      return { out: opts.ui ? result.fired.map((o) => renderWatchFire(o, opts.ui!)).join("\n\n") : checkText(result), exitCode: result.errors.length ? 1 : 0 };
     } finally {
       await renderer.close();
     }
@@ -151,7 +154,7 @@ export async function runWatchCommand(argv: string[], opts: { cwd: string }): Pr
   if (sub === "remove") {
     if (args.length !== 1) throw new Error("usage: mb watch remove <name>");
     const removed = await removeWatch(args[0]);
-    return { out: json ? JSON.stringify({ removed: removed.name }) : `ok removed ${removed.name}` };
+    return { out: json ? JSON.stringify({ removed: removed.name }) : opts.ui ? renderWatchRemove(removed.name, opts.ui) : `ok removed ${removed.name}` };
   }
 
   if (sub === "logs") {
@@ -160,7 +163,7 @@ export async function runWatchCommand(argv: string[], opts: { cwd: string }): Pr
     if (warning) process.stderr.write(`warning: ${warning}\n`);
     const out = json
       ? JSON.stringify({ events: events.map((e) => publicEvent(e.name, e.event)) })
-      : logsText(events);
+      : opts.ui ? renderWatchLogs(events, opts.ui) : logsText(events);
     return { out };
   }
 
@@ -168,7 +171,14 @@ export async function runWatchCommand(argv: string[], opts: { cwd: string }): Pr
     if (args.length) throw new Error("usage: mb watch run [--json]");
     const renderer = lazyRenderer();
     try {
-      const code = await runWatchForeground({ json, render: renderer.render });
+      const ui = opts.ui;
+      const code = await runWatchForeground({
+        json,
+        render: renderer.render,
+        format: ui && !json ? (o) => renderWatchFire(o, ui) : undefined,
+        formatError: ui && !json ? (o) => renderWatchError(o, ui) : undefined,
+        formatStatus: ui && !json ? (s) => paint(ui, s, "dim") : undefined,
+      });
       return { exitCode: code };
     } finally {
       await renderer.close();

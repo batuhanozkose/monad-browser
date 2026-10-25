@@ -12,6 +12,13 @@ description: Drive a real headless Chrome from the shell with \`mb\` (monad-brow
 
 A warm daemon keeps Chrome open between calls, so each command is ~40 ms.
 
+## Output
+- Captured/pipe output is plain text; a TTY adds semantic color (refs, URLs, numbers, ok/error/warn).
+- \`NO_COLOR\`, \`FORCE_COLOR\`, \`TERM=dumb\` and CI are honored; \`--json\` is always the stable machine contract.
+- \`mb --help\` is a compact command map; \`mb help --all\` lists every command; \`mb <command> --help\` shows flags and examples.
+- An action with \`-s\` prints a one-line receipt and only the changed lines.
+- Windows legacy consoles default to ASCII UI glyphs; \`MB_ASCII=1\` forces ASCII, \`MB_UNICODE=1\` forces Unicode.
+
 ## Core loop
 1. \`mb open <url> -s\` — navigate and print the snapshot.
 2. Read refs like \`[Sign in]@12\` or \`button "Submit" @6\`.
