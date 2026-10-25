@@ -77,6 +77,7 @@ const srv = http.createServer((q, r) => {
   }
   if (u.pathname === "/md") { r.setHeader("content-type", "text/markdown"); r.end("# Matrix Doc\\n\\nHello **matrix**.\\n"); return; }
   if (u.pathname === "/llms.txt") { r.setHeader("content-type", "text/plain"); r.end("# Matrix llms\\n- [Doc](/md)\\n"); return; }
+  if (u.pathname === "/llms-full.txt") { r.setHeader("content-type", "text/plain"); r.end("# Matrix full\\nEverything.\\n"); return; }
   try {
     const name = u.pathname;
     const file = path.join(dir, name.split("?")[0]);
@@ -239,7 +240,9 @@ async function scenario(r) {
   S("help click", "help", ["help", "click"], { out: /^usage: mb click/ });
   S("click --help", "click", ["click", "--help"], { out: /^usage: mb click/ });
   S("doctor", "doctor", ["doctor"], { out: /monad-browser doctor/ });
+  S("doctor --fix", "doctor", ["doctor", "--fix"], { out: /monad-browser doctor/ });
   S("skills list", "skills", ["skills", "list"], { sub: "skills list", out: /^core\t/m });
+  S("skills (default)", "skills", ["skills"], { out: /^core\t/m });
   S("skills get", "skills", ["skills", "get", "core"], { sub: "skills get", out: /Windows and PowerShell/ });
   S("skills path", "skills", ["skills", "path"], { sub: "skills path", out: /skills[\\/]monad-browser$/m });
   S("install-skill --print", "install-skill", ["install-skill", "--print"], { out: /^---\nname: monad-browser/m });
@@ -303,11 +306,16 @@ async function scenario(r) {
   S("tab back to form", "tab", ["tab", "0"]);
 
   S("fill", "fill", ["fill", st.name, "Ada"]);
+  S("fill --submit", "fill", ["fill", st.name, "Ada", "--submit"]);
+  S("fill --submit result", "get", ["get", "text", "#out"], { out: /Hello Ada/ });
   S("get value", "get", ["get", "value", st.name], { out: /^Ada$/ });
   S("fill empty string", "fill", ["fill", st.name, ""]);
   S("get value (empty)", "get", ["get", "value", st.name], { out: /^$/ });
   S("type --into", "type", ["type", "Grace", "--into", st.name]);
   S("get value (typed)", "get", ["get", "value", st.name], { out: /Grace/ });
+  S("focus for type", "focus", ["focus", st.name]);
+  S("type focused", "type", ["type", "!"]);
+  S("type focused value", "get", ["get", "value", st.name], { fn: (x) => r.check(/Grace/.test(x.out) && /!/.test(x.out), `unexpected value ${x.out}`) });
   S("press", "press", ["press", "Escape"]);
   S("keydown", "keydown", ["keydown", "Shift"]);
   S("keyup", "keyup", ["keyup", "Shift"]);
@@ -317,6 +325,10 @@ async function scenario(r) {
   S("check", "check", ["check", st.checkbox]);
   S("is checked", "is", ["is", "checked", st.checkbox], { out: /true/ });
   S("uncheck", "uncheck", ["uncheck", st.checkbox]);
+  S("find label check", "find", ["find", "label", "I agree", "check"], { out: /^ok checked/ });
+  S("find label uncheck", "find", ["find", "label", "I agree", "uncheck"], { out: /^ok unchecked/ });
+  S("find role hover", "find", ["find", "role", "button", "hover", "--name", "Submit"], { out: /^ok$/ });
+  S("find role focus", "find", ["find", "role", "button", "focus", "--name", "Submit"], { out: /^ok$/ });
   S("is visible", "is", ["is", "visible", st.checkbox], { out: /true/ });
   S("is enabled", "is", ["is", "enabled", st.checkbox], { out: /true/ });
 
@@ -417,7 +429,8 @@ async function scenario(r) {
   S("screenshot --if-changed", "screenshot", ["screenshot", join(out, "chg.png"), "--if-changed"], { out: /^ok / });
   S("screenshot --if-changed again", "screenshot", ["screenshot", join(out, "chg.png"), "--if-changed"], { out: /^unchanged$/ });
   S("screenshot --dir", "screenshot", ["screenshot", "--dir", out, "--jpeg"], { out: /^ok / });
-  S("pdf", "pdf", ["pdf", join(out, "sayfa.pdf")], { out: /^ok / });
+  S("screenshot --format", "screenshot", ["screenshot", join(out, "fmt.jpg"), "--format", "jpeg", "--quality", "50"]);
+  S("pdf", "pdf", ["pdf", join(out, "sayfa.pdf"), "--landscape", "--no-print-background"], { out: /^ok / });
   r.check(readFileSync(join(out, "sayfa.pdf")).subarray(0, 5).toString() === "%PDF-", "pdf is not a PDF");
 
   const uploadFile = join(out, "yükle me.txt");
@@ -455,6 +468,7 @@ async function scenario(r) {
   S("open echo", "open", ["open", F("echo?a=1&b=2#frag")]);
   S("url with & ? #", "eval", ["eval", "return location.search + '|' + location.hash"], { out: /^\?a=1&b=2\|#frag$/ });
   S("network requests", "network", ["network", "requests", "--filter", "echo"], { sub: "network requests", out: /echo/ });
+  S("network requests --clear", "network", ["network", "requests", "--clear"], { sub: "network requests" });
   S("network clear", "network", ["network", "clear"], { sub: "network clear" });
   const har = join(out, "ag.har");
   S("network har start", "network", ["network", "har", "start", har], { sub: "network har start" });
@@ -465,6 +479,9 @@ async function scenario(r) {
   S("open routed", "open", ["open", F("echo?routed=1")]);
   S("routed body", "text", ["text"], { out: /mocked/ });
   S("network unroute", "network", ["network", "unroute"], { sub: "network unroute" });
+  S("network route abort", "network", ["network", "route", "**/echo*", "--abort"], { sub: "network route" });
+  S("open aborted", "open", ["open", F("echo?aborted=1")], { code: 1, err: /navigation failed|ERR_FAILED/ });
+  S("network unroute abort", "network", ["network", "unroute"], { sub: "network unroute" });
 
   // -- emulation ----------------------------------------------------------------------------
   S("set viewport", "set", ["set", "viewport", "500", "700"], { sub: "set viewport" });
@@ -514,6 +531,7 @@ async function scenario(r) {
   S("read --outline", "read", ["read", F("matrix.html"), "--outline"], { out: /Matrix/ });
   S("read --filter", "read", ["read", F("matrix.html"), "--filter", "Matrix"], { out: /Matrix/ });
   S("read --llms", "read", ["read", F("llms.txt"), "--llms", "index"], { out: /Matrix llms/ });
+  S("read --llms full", "read", ["read", F("llms-full.txt"), "--llms", "full"], { out: /Matrix full/ });
   S("read active tab", "read", ["read"], { out: /Sign up/ });
 
   // -- mcp ----------------------------------------------------------------------------------
@@ -521,12 +539,16 @@ async function scenario(r) {
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "matrix", version: "1" } } },
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "browser_open", arguments: { url: F("form.html") } } },
+    { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "browser_fill", arguments: { target: "#name", text: "MCP" } } },
+    { jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "browser_get", arguments: { what: "value", target: "#name" } } },
   ].map((m) => JSON.stringify(m)).join("\n") + "\n";
   S("mcp handshake", "mcp", ["mcp"], { input: mcpInput, out: /"serverInfo"/, fn: (x) => {
     const lines = x.out.split("\n").filter(Boolean).map((l) => JSON.parse(l));
-    r.check(lines.length === 3, `mcp returned ${lines.length} responses`);
+    r.check(lines.length === 5, `mcp returned ${lines.length} responses`);
     r.check(lines[1]?.result?.tools?.length === 14, "mcp tools/list is not 14 tools");
     r.check(/\[textbox Name\]@|textbox "Name" @/.test(lines[2]?.result?.content?.[0]?.text ?? ""), "mcp browser_open returned no snapshot");
+    r.check(/ok filled/.test(lines[3]?.result?.content?.[0]?.text ?? ""), "mcp browser_fill failed");
+    r.check(/^MCP$/.test((lines[4]?.result?.content?.[0]?.text ?? "").trim()), "mcp browser_get returned the wrong value");
   } });
 
   S("stop", "stop", ["stop"], { out: /ok stopped/ });
@@ -582,6 +604,16 @@ async function scenario(r) {
   S("start for concurrency", "start", ["start"]);
   await r.concurrent(["eval", "return 1"]);
   S("stop after concurrency", "stop", ["stop"]);
+
+  const multiA = { MONAD_SESSION: `${r.session}-multi-a` };
+  const multiB = { MONAD_SESSION: `${r.session}-multi-b` };
+  S("multi session A", "open", ["open", F("form.html")], { env: multiA });
+  S("multi session B", "open", ["open", F("matrix.html")], { env: multiB });
+  S("multi sessions listed", "sessions", ["sessions"], { fn: (x) => {
+    r.check(x.out.includes(`${r.session}-multi-a`) && x.out.includes(`${r.session}-multi-b`), `sessions did not list both:\n${x.out}`);
+  } });
+  S("multi session A stop", "stop", ["stop"], { env: multiA });
+  S("multi session B stop", "stop", ["stop"], { env: multiB });
 
   const staleHome = join(cwd, "stale home");
   mkdirSync(staleHome, { recursive: true });
