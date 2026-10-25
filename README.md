@@ -272,7 +272,7 @@ A target can be any of:
 
 | Form | Example | Notes |
 | --- | --- | --- |
-| Ref | `@12` | from the latest snapshot; stable, self-heals by role + name |
+| Ref | `@12` or `12` | from the latest snapshot; stable, self-heals by role + name |
 | Text | `text=Sign in` | exact accessible name |
 | Substring | `text~=Sign` | accessible name contains the text |
 | Role | `role=button:Submit` | ARIA role (+ accessible name) |
@@ -285,6 +285,33 @@ A target can be any of:
 Selectors resolve in the **top document**. To act inside an iframe, take a snapshot and use the
 `@N` refs it prints there — refs, clicks and fills reach into same-process and out-of-process
 frames. Actions auto-wait until the element is actionable; a covering element is named in the error.
+
+### PowerShell
+
+PowerShell parses the command line before `mb` starts, and `@12` is splatting syntax: the ref is
+dropped and the command runs without a target.
+
+```powershell
+mb click @12 -s      # error: usage: click … — @12 never reached mb
+mb click '@12' -s    # quote it, or …
+mb click 12 -s       # … use the plain number; it is the same ref
+```
+
+Every target works the same way (`click`, `fill`, `hover`, `get`, `--into`, `--on`). Quote anything
+else PowerShell would interpret:
+
+| Write | PowerShell does | Fix |
+| --- | --- | --- |
+| `@12` | splatting — drops it | `'@12'` or `12` |
+| `#email` | starts a comment | `'#email'` |
+| `*` | expands to file names | `'*'` |
+| `text=Sign in` | splits at the space | `'text=Sign in'` |
+| `$HOME`, `$(…)` | expands the variable | `'…'` (single quotes) |
+| `a;b`, `(…)` | statement / expression | `'a;b'` |
+| `C:\path\file.pdf` | unchanged | fine unquoted |
+
+`--` still ends flag parsing (`mb click -- -weird-id`), and `mb run --file plan.js` avoids inline
+quoting entirely. In `cmd.exe` nothing is rewritten, so `mb click @12 -s` works as written.
 
 ## Command reference
 
@@ -429,7 +456,8 @@ A page opened and captured with `mb open` + `mb screenshot`:
   `set viewport` for anything else.
 - **Windows** runs on the Node launcher (the Go thin client is built for Linux/macOS); npm 12's
   default install-script policy is fine because `bin/mb` is a Node script that finds the packaged
-  native binary itself.
+  native binary itself. In PowerShell, quote a ref (`'@12'`) or use the plain number (`12`) — see
+  [PowerShell](#powershell).
 
 ## Development
 

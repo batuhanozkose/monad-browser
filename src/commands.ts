@@ -34,7 +34,12 @@ const BOOL_FLAGS = new Set([
 ]);
 const SHORT: Record<string, string> = { i: "interactive", f: "full", s: "snapshot", d: "diff", b: "baseline" };
 
-const need = (args: string[], n: number, usage: string) => { if (args.length < n) throw new Error(`usage: ${usage}`); };
+// PowerShell parses `@46` as splatting and removes it before the CLI is started, so a target can go
+// missing in a way the user cannot see. Every target-taking command says how to write it instead.
+const TARGET_HINT = "in PowerShell a bare @ref is splatting and is dropped; quote it ('@12') or pass the number (12).";
+const need = (args: string[], n: number, usage: string, target = false) => {
+  if (args.length < n) throw new Error(`usage: ${usage}${target ? `\nmissing target — ${TARGET_HINT}` : ""}`);
+};
 const num = (v: unknown, d: number) => (v === undefined || v === true ? d : Number(v));
 const jsonOut = (v: unknown) => JSON.stringify(v);
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -90,7 +95,7 @@ export const COMMANDS: Record<string, Cmd> = {
   click: {
     usage: "click <@ref|selector> [--button right] [--count 2] [--new-tab] [-s]",
     async run(ctx, args, flags) {
-      need(args, 1, this.usage);
+      need(args, 1, this.usage, true);
       await ctx.browser.click(args[0], { button: (flags.button as any) || "left", count: num(flags.count, 1), newTab: !!flags["new-tab"] });
       const { url } = await ctx.browser.info();
       return maybeSnap(ctx, flags, `ok clicked ${args[0]} — ${url}`);
@@ -99,7 +104,7 @@ export const COMMANDS: Record<string, Cmd> = {
   fill: {
     usage: "fill <@ref|selector> <text> [--submit] [-s]   clear and type into an input (--submit presses Enter)",
     async run(ctx, args, flags) {
-      need(args, 2, this.usage);
+      need(args, 2, this.usage, true);
       await ctx.browser.fill(args[0], args.slice(1).join(" "));
       if (flags.submit) await ctx.browser.submit(args[0]);
       return maybeSnap(ctx, flags, `ok filled ${args[0]}`);
@@ -109,6 +114,7 @@ export const COMMANDS: Record<string, Cmd> = {
     usage: "type <text> [--into @ref]   insert text at the focused element",
     async run(ctx, args, flags) {
       need(args, 1, this.usage);
+      if (flags.into === true) throw new Error(`usage: ${this.usage}\n--into needs a target — ${TARGET_HINT}`);
       await ctx.browser.type(args.join(" "), typeof flags.into === "string" ? flags.into : undefined);
       return "ok typed";
     },
@@ -125,15 +131,16 @@ export const COMMANDS: Record<string, Cmd> = {
   select: {
     usage: "select <@ref|selector> <value...>   choose <select> option(s) by value or label",
     async run(ctx, args) {
-      need(args, 2, this.usage);
+      need(args, 2, this.usage, true);
       const picked = await ctx.browser.select(args[0], args.slice(1));
       return `ok selected ${picked.join(", ")}`;
     },
   },
-  hover: { usage: "hover <@ref|selector>", async run(ctx, args) { need(args, 1, this.usage); await ctx.browser.hover(args[0]); return "ok"; } },
+  hover: { usage: "hover <@ref|selector>", async run(ctx, args) { need(args, 1, this.usage, true); await ctx.browser.hover(args[0]); return "ok"; } },
   scroll: {
     usage: "scroll [down|up|left|right] [px] [--on @ref]",
     async run(ctx, args, flags) {
+      if (flags.on === true) throw new Error(`usage: ${this.usage}\n--on needs a target — ${TARGET_HINT}`);
       await ctx.browser.scroll(args[0] ?? "down", num(args[1], 600), typeof flags.on === "string" ? flags.on : undefined);
       const pos = await ctx.browser.evaluate("({y: Math.round(scrollY), h: document.documentElement.scrollHeight, vh: innerHeight})");
       return `ok scrollY=${pos.y}/${Math.max(0, pos.h - pos.vh)}`;
@@ -155,6 +162,7 @@ export const COMMANDS: Record<string, Cmd> = {
     usage: "screenshot [path] [--full] [--on @ref] [--jpeg] [--format png|jpeg] [--quality N] [--annotate] [--if-changed] [--dir D]",
     async run(ctx, args, flags) {
       if (flags.annotate && flags["if-changed"]) throw new Error("--annotate and --if-changed cannot be combined");
+      if (flags.on === true) throw new Error(`usage: ${this.usage}\n--on needs a target — ${TARGET_HINT}`);
       const jpeg = !!flags.jpeg || flags.format === "jpeg" || (!flags.format && process.env.MONAD_SCREENSHOT_FORMAT === "jpeg");
       const format = jpeg ? "jpeg" : "png";
       const quality = flags.quality !== undefined ? num(flags.quality, 70)
@@ -291,8 +299,8 @@ export const COMMANDS: Record<string, Cmd> = {
       if (what === "title") return (await b.info()).title;
       if (what === "url") return (await b.info()).url;
       if (what === "cdp-url") return b.cdpUrl() || "(not a local launch)";
-      if (what === "count") { need(args, 2, this.usage); return String(await b.getCount(args[1])); }
-      need(args, 2, this.usage);
+      if (what === "count") { need(args, 2, this.usage, true); return String(await b.getCount(args[1])); }
+      need(args, 2, this.usage, true);
       switch (what) {
         case "text": return b.text(args[1], num(flags.max, 4000));
         case "html": return b.getHtml(args[1]);
@@ -310,7 +318,7 @@ export const COMMANDS: Record<string, Cmd> = {
   is: {
     usage: "is <visible|enabled|checked> <target>",
     async run(ctx, args) {
-      need(args, 2, this.usage);
+      need(args, 2, this.usage, true);
       const b = ctx.browser;
       if (args[0] === "visible") return String(await b.isVisible(args[1]));
       if (args[0] === "enabled") return String(await b.isEnabled(args[1]));
@@ -349,19 +357,19 @@ export const COMMANDS: Record<string, Cmd> = {
   },
   check: {
     usage: "check <target> [-s]",
-    async run(ctx, args, flags) { need(args, 1, this.usage); await ctx.browser.setChecked(args[0], true); return maybeSnap(ctx, flags, `ok checked ${args[0]}`); },
+    async run(ctx, args, flags) { need(args, 1, this.usage, true); await ctx.browser.setChecked(args[0], true); return maybeSnap(ctx, flags, `ok checked ${args[0]}`); },
   },
   uncheck: {
     usage: "uncheck <target> [-s]",
-    async run(ctx, args, flags) { need(args, 1, this.usage); await ctx.browser.setChecked(args[0], false); return maybeSnap(ctx, flags, `ok unchecked ${args[0]}`); },
+    async run(ctx, args, flags) { need(args, 1, this.usage, true); await ctx.browser.setChecked(args[0], false); return maybeSnap(ctx, flags, `ok unchecked ${args[0]}`); },
   },
-  focus: { usage: "focus <target>", async run(ctx, args) { need(args, 1, this.usage); await ctx.browser.focus(args[0]); return "ok"; } },
-  scrollintoview: { usage: "scrollintoview <target>", async run(ctx, args) { need(args, 1, this.usage); await ctx.browser.scrollIntoViewTarget(args[0]); return "ok"; } },
-  highlight: { usage: "highlight <target>", async run(ctx, args) { need(args, 1, this.usage); await ctx.browser.highlight(args[0]); return "ok"; } },
+  focus: { usage: "focus <target>", async run(ctx, args) { need(args, 1, this.usage, true); await ctx.browser.focus(args[0]); return "ok"; } },
+  scrollintoview: { usage: "scrollintoview <target>", async run(ctx, args) { need(args, 1, this.usage, true); await ctx.browser.scrollIntoViewTarget(args[0]); return "ok"; } },
+  highlight: { usage: "highlight <target>", async run(ctx, args) { need(args, 1, this.usage, true); await ctx.browser.highlight(args[0]); return "ok"; } },
   upload: {
     usage: "upload <target> <file...>",
     async run(ctx, args) {
-      need(args, 2, this.usage);
+      need(args, 2, this.usage, true);
       const files = args.slice(1).map((f) => resolvePath(ctx.cwd, f));
       for (const f of files) if (!existsSync(f)) throw new Error(`no such file: ${f}`);
       await ctx.browser.upload(args[0], files);
@@ -371,7 +379,7 @@ export const COMMANDS: Record<string, Cmd> = {
   download: {
     usage: "download <target> [dir] [--timeout ms]",
     async run(ctx, args, flags) {
-      need(args, 1, this.usage);
+      need(args, 1, this.usage, true);
       const dir = resolvePath(ctx.cwd, args[1] ?? ctx.browser.defaultDownloadPath ?? "downloads");
       const path = await ctx.browser.download(args[0], dir, num(flags.timeout, 30_000));
       return `ok ${path}`;
@@ -386,7 +394,7 @@ export const COMMANDS: Record<string, Cmd> = {
       return `ok ${out} (${Math.round(buf.length / 1024)} KB)`;
     },
   },
-  drag: { usage: "drag <source> <target>", async run(ctx, args) { need(args, 2, this.usage); await ctx.browser.drag(args[0], args[1]); return "ok"; } },
+  drag: { usage: "drag <source> <target>", async run(ctx, args) { need(args, 2, this.usage, true); await ctx.browser.drag(args[0], args[1]); return "ok"; } },
   keyboard: {
     usage: "keyboard type <text> | keyboard inserttext <text>",
     async run(ctx, args) {
@@ -624,6 +632,7 @@ export function helpText() {
   for (const usage of new Set(Object.values(EXTRA_USAGE))) lines.push(`  ${usage}`);
   lines.push("", "aliases: goto, navigate → open · snap → snapshot · js → eval · scrollinto → scrollintoview · key → press");
   lines.push("refs: snapshot assigns @N to interactive elements; refs stay stable while the element lives.");
+  lines.push("PowerShell: a bare @N is splatting and never reaches mb — write '@N' or the plain number N.");
   return lines.join("\n");
 }
 

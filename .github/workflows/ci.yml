@@ -59,6 +59,10 @@ jobs:
       - name: e2e tests
         if: steps.chrome.outputs.found == 'true'
         run: node --test test/e2e.test.mjs
+      - name: shell e2e (real mb through pwsh, cmd and bash)
+        if: steps.chrome.outputs.found == 'true'
+        shell: bash
+        run: node test/shell-e2e.mjs --install
       - name: native client is used (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash

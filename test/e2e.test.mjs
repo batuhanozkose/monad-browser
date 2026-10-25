@@ -432,3 +432,14 @@ test("profiler and trace produce files", { skip }, async () => {
   assert.ok(existsSync(trace));
   assert.match(readFileSync(trace, "utf8"), /"traceEvents"/);
 });
+
+test("bare numeric refs work and a dropped target explains the PowerShell fix", { skip }, () => {
+  mb("open", `${F}/form.html`);
+  mb("snapshot", "-i");
+  // `@N` and `N` are the same ref; the plain number survives shells that treat `@N` as splatting.
+  assert.match(mb("click", "6"), /ok clicked 6/);
+  // PowerShell deletes a bare @ref before the CLI starts, so the error has to say what to write.
+  assert.throws(() => mb("click"), /missing target — in PowerShell a bare @ref is splatting/);
+  assert.throws(() => mb("click"), /quote it \('@12'\) or pass the number \(12\)/);
+  assert.throws(() => mb("type", "x", "--into"), /--into needs a target/);
+});
