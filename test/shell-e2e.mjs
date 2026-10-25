@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,11 @@ const baseEnv = binDir
   ? { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH}` }
   : { ...process.env };
 
+// cmd commands run from a batch file (see run); keep them in one throwaway directory.
+const cmdDir = process.platform === "win32" ? mkdtempSync(join(tmpdir(), "mb-cmd-")) : undefined;
+let cmdSeq = 0;
+if (cmdDir) process.on("exit", () => rmSync(cmdDir, { recursive: true, force: true }));
+
 function available(shell) {
   const s = SHELLS[shell];
   const r = spawnSync(s.file, s.args("exit 0"), { encoding: "utf8" });
@@ -65,10 +70,20 @@ function run(shell, session, argv) {
     if (typeof a === "string") return s.quote(a);
     return a.raw !== undefined ? a.raw : s.force(a.quoted);
   })].join(" ");
-  const r = spawnSync(s.file, s.args(line), {
+  const opts = {
     encoding: "utf8", timeout: 120_000,
     env: { ...baseEnv, MONAD_SESSION: session, MONAD_NO_SANDBOX: process.env.MONAD_NO_SANDBOX ?? "1" },
-  });
+  };
+  // `cmd /s /c "<line>"` keeps inner quotes literally, so a URL arrives as "https://…". Writing the
+  // line to a batch file removes that extra quoting layer and is still real cmd parsing.
+  let r;
+  if (shell === "cmd") {
+    const file = join(cmdDir, `step-${++cmdSeq}.cmd`);
+    writeFileSync(file, `@echo off\r\n${line}\r\n`);
+    r = spawnSync("cmd", ["/d", "/c", file], opts);
+  } else {
+    r = spawnSync(s.file, s.args(line), opts);
+  }
   return { code: r.status, out: (r.stdout ?? "").trim(), err: (r.stderr ?? "").trim(), error: r.error, line };
 }
 
