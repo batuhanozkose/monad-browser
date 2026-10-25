@@ -22,6 +22,10 @@ export function parseArgs(argv: string[]): { args: string[]; flags: Flags } {
       else if (BOOL_FLAGS.has(k) || i + 1 >= argv.length || argv[i + 1].startsWith("-")) flags[k] = true;
       else flags[k] = argv[++i];
     } else if (/^-[a-zA-Z]$/.test(a)) flags[SHORT[a[1]] ?? a[1]] = true;
+    // Clustered short flags (-is, -isd) only when every letter is a real short flag, so a value
+    // such as `-hello` or a negative-looking selector stays a positional argument.
+    else if (/^-[a-zA-Z]{2,}$/.test(a) && [...a.slice(1)].every((ch) => ch in SHORT))
+      for (const ch of a.slice(1)) flags[SHORT[ch]] = true;
     else args.push(a);
   }
   return { args, flags };

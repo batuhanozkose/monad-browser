@@ -47,6 +47,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/unit.test.mjs test/e2e.test.mjs",
     "test:shells": "node test/shell-e2e.mjs",
+    "test:matrix": "node test/matrix.mjs",
     "build:native": "node scripts/build-native.mjs",
     "postinstall": "node scripts/postinstall.mjs",
     "prepack": "npm run build && npm run build:native"

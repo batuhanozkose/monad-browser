@@ -102,6 +102,33 @@ jobs:
           $out = mb --version
           if ($out.Trim() -ne "monad-browser $version") { throw "unexpected version after scripted install: $out" }
 
+  matrix:
+    name: command matrix (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x64
+          - os: windows-latest
+            name: windows-x64
+          - os: macos-latest
+            name: macos-arm64
+    env:
+      MONAD_NO_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: command matrix (real Chrome, bash/pwsh/cmd)
+        run: node test/matrix.mjs --install
+
   native:
     name: native client (Go)
     runs-on: ubuntu-latest

@@ -118,6 +118,9 @@ test("filterSections keeps matching markdown sections and outlineMarkdown lists 
 test("parseArgs handles short flags, values and --", () => {
   assert.deepEqual(parseArgs(["-s"]).flags.snapshot, true);
   assert.deepEqual(parseArgs(["-i", "-d"]).flags, { interactive: true, diff: true });
+  assert.deepEqual(parseArgs(["-is"]).flags, { interactive: true, snapshot: true });
+  assert.deepEqual(parseArgs(["open", "x.com", "-isd"]).flags, { interactive: true, snapshot: true, diff: true });
+  assert.deepEqual(parseArgs(["-abc"]).args, ["-abc"]);
   assert.equal(parseArgs(["--max-lines", "5"]).flags["max-lines"], "5");
   assert.equal(parseArgs(["--max-lines=5"]).flags["max-lines"], "5");
   assert.deepEqual(parseArgs(["--", "-x", "y"]).args, ["-x", "y"]);
