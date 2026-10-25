@@ -22,13 +22,15 @@ const skip = !chrome && "no Chrome found";
 
 const quotePwsh = (s) => `'${s.replaceAll("'", "''")}'`;
 const quoteBash = (s) => `'${s.replaceAll("'", "'\\''")}'`;
-// Windows argument escaping: quote only when needed, and escape backslashes before a quote.
+// Windows argument escaping: quote only when needed. Inner quotes become "" so cmd keeps quote
+// parity (metacharacters such as & | ( ) stay quoted) while CommandLineToArgvW turns them back into
+// one literal quote. A trailing backslash is doubled so it cannot escape the closing quote.
 const quoteCmd = (s) => {
   if (/^[\w@.=:+-]+$/.test(s)) return s;
-  const escaped = s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1");
+  const escaped = s.replaceAll('"', '""').replace(/(\\+)$/, "$1$1");
   return `"${escaped}"`;
 };
-const forceCmd = (s) => `"${s.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
+const forceCmd = (s) => `"${s.replaceAll('"', '""').replace(/(\\+)$/, "$1$1")}"`;
 
 const SHELLS = {
   pwsh: { file: "pwsh", args: (line) => ["-NoProfile", "-NonInteractive", "-Command", line], quote: quotePwsh, force: quotePwsh },
@@ -399,7 +401,7 @@ async function scenario(r) {
 
   S("eval", "eval", ["eval", "return 1+1"], { out: /^2$/ });
   S("eval --", "eval", ["eval", "--", "return 2+2"], { out: /^4$/ });
-  S("eval quoting", "eval", ["eval", 'return "a;b|c&d(e)f,g`h!i"'], { out: /^a;b\|c&d\(e\)f,g`h!i$/ });
+  S("eval quoting", "eval", ["eval", "return 'a;b|c&d(e)f,g`h!i'"], { out: /^a;b\|c&d\(e\)f,g`h!i$/ });
   S("eval json", "eval", ["eval", 'return JSON.stringify({a:[1,2]})'], { out: /^\{"a":\[1,2\]\}$/ });
 
   // -- files --------------------------------------------------------------------------------
@@ -499,7 +501,7 @@ async function scenario(r) {
   S("dialog stop", "stop", ["stop"], { env: dlg });
 
   // -- run ----------------------------------------------------------------------------------
-  S("run inline", "run", ["run", `await goto("${F("form.html")}"); return await title()`], { out: /Fixture Form/ });
+  S("run inline", "run", ["run", `await goto('${F("form.html")}'); return await title()`], { out: /Fixture Form/ });
   S("run inline quoting", "run", ["run", "return 'dollar:$ tick:`'"], { out: /^dollar:\$ tick:`$/ });
   const plan = join(out, "plan dosyası.js");
   writeFileSync(plan, `const dollar = "$HOME";\nconst tick = \`tick\`;\nawait goto(${JSON.stringify(F("form.html"))});\nreturn dollar + "|" + tick + "|" + (await title());\n`);
@@ -559,7 +561,9 @@ async function scenario(r) {
   const chromeDir = join(cwd, "chrome dir");
   mkdirSync(chromeDir, { recursive: true });
   let chromePath = chrome;
-  if (process.platform !== "win32") {
+  if (process.platform === "linux") {
+    // Chrome on macOS refuses to launch from a symlink outside its app bundle; its real path already
+    // contains spaces, as does Chrome's Program Files path on Windows.
     const link = join(chromeDir, "chrome");
     if (!existsSync(link)) symlinkSync(chrome, link);
     chromePath = link;
