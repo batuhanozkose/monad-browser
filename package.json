@@ -1,6 +1,6 @@
 {
   "name": "monad-browser",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Headless, turnkey browser CLI for AI agents: compact AX snapshots with @refs, warm daemon, raw CDP. No Playwright.",
   "type": "module",
   "repository": {
@@ -45,7 +45,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/unit.test.mjs test/e2e.test.mjs",
+    "test": "npm run build && node --test test/unit.test.mjs test/watch.test.mjs && node --test test/e2e.test.mjs test/watch-e2e.test.mjs",
     "test:shells": "node test/shell-e2e.mjs",
     "test:matrix": "node test/matrix.mjs",
     "build:native": "node scripts/build-native.mjs",

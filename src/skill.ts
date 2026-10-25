@@ -64,6 +64,17 @@ the error names the cover — close it first.
 - Parallel browsers: \`mb --session work open …\`; \`mb sessions\`; \`mb stop --all\`.
 - Attach to an existing Chrome: \`mb --cdp 9222 open …\`. Visible window: \`mb --headful open …\`.
 
+## Watch pages, feeds and releases
+- \`mb watch add <url|owner/repo> --kind page|rss|release --extract text|css:<selector>|json:<path> --condition <expr> --every 5m [--name N]\`
+- Conditions: \`changed\`, \`contains "x"\`, \`not-contains "x"\`, \`matches /re/\`, \`> 10\`, \`< 5\`, \`== 0\`.
+  The first check stores a baseline; a condition fires on the transition into it, not every interval.
+- \`mb watch list\`, \`mb watch check [name|all]\`, \`mb watch logs [name]\`, \`mb watch remove <name>\`.
+- The timer lives in the daemon between CLI calls; \`mb watch run\` is the foreground/CI alternative.
+  \`--render\` uses Chrome for JS-heavy pages; the default fetch path is Chrome-less.
+- Text output appears only when something fires. Add \`--json\` for the stable machine contract.
+- \`--exec '<cmd>'\` runs only on a fire and never through a shell; \`--notify\` POSTs to
+  \`MONAD_WATCH_NOTIFY_URL\` (or \`watchNotifyUrl\` in config).
+
 ## Windows and PowerShell
 \`mb\` runs on Node there (the Go thin client is Linux/macOS only). PowerShell parses arguments
 before \`mb\` sees them: a bare \`@12\` is splatting and is dropped, so write

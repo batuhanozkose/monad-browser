@@ -45,7 +45,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - name: unit tests
-        run: node --test test/unit.test.mjs
+        run: node --test test/unit.test.mjs test/watch.test.mjs
+      - name: watch e2e (local fixture, no Chrome)
+        run: node --test test/watch-e2e.test.mjs
       - name: detect Chrome
         id: chrome
         shell: bash
@@ -59,6 +61,9 @@ jobs:
       - name: e2e tests
         if: steps.chrome.outputs.found == 'true'
         run: node --test test/e2e.test.mjs
+      - name: watch render e2e
+        if: steps.chrome.outputs.found == 'true'
+        run: node --test --test-name-pattern='render uses Chrome' test/watch-e2e.test.mjs
       - name: shell e2e (real mb through pwsh, cmd and bash)
         if: steps.chrome.outputs.found == 'true'
         shell: bash

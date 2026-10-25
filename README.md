@@ -13,7 +13,7 @@ snapshots with stable `@N` refs.
 [![mcp](https://img.shields.io/badge/MCP-14%20lean%20tools-8b5cf6?style=flat-square)](#mcp-server)
 
 [Quick start](#quick-start) · [Why](#why-monad-browser) · [Benchmarks](#benchmarks) · [How it works](#how-it-works) ·
-[Commands](#command-reference) · [MCP](#mcp-server) · [Agent skill](#agent-skill) · [Screenshots](#screenshots)
+[Commands](#command-reference) · [Watch](#watch) · [MCP](#mcp-server) · [Agent skill](#agent-skill) · [Screenshots](#screenshots)
 
 </div>
 
@@ -338,6 +338,7 @@ newlines. Unknown `--flags` are rejected rather than silently ignored.
 | `find <role\|text\|label\|placeholder\|alt\|title\|testid\|first\|last\|nth> …` | semantic locator + action |
 | `text [target] [--max N]` | visible text of the page or an element |
 | `read [url] [--outline] [--filter T] [--raw] [--require-md] [--llms index\|full] [--timeout ms]` | markdown/text; URL reads do not launch Chrome |
+| `watch add\|list\|check\|remove\|logs\|run` | condition-gated page / RSS / GitHub release watchers (no Chrome by default) |
 | `screenshot [path] [--full] [--on @ref] [--jpeg] [--format png\|jpeg] [--quality N] [--annotate] [--if-changed] [--dir D]` | image of the viewport/page/element |
 | `diff snapshot [--baseline file] [-i]` · `diff url <a> <b> [-i]` | compare states or pages |
 | `back` · `forward` · `reload` | history & reload |
@@ -376,6 +377,108 @@ mb --no-auto-dialog open x.com    # inspect dialogs before accepting
 `monad-browser.json` (project) and `~/.monad-browser/config.json` (user) hold defaults such as
 `chrome`, `headful`, `idleMinutes`, `block`, `proxy`, `headers`, `viewport`, `downloadPath`, and
 `screenshotDir`; `--config <path>` selects another file. CLI flags and environment variables win.
+
+## Watch
+
+`mb watch` checks a page, an RSS/Atom feed or a GitHub release feed on a timer and stays quiet
+until a condition fires. The check itself is Chrome-less by default: it uses the same HTTP/read
+path as `mb read`, so a watcher costs a request, not a browser.
+
+```sh
+# Page: watch one CSS-selected value, wake only when it says "down"
+mb watch add https://example.com/status --kind page --extract 'css:#status' \
+  --condition 'contains "down"' --every 5m
+
+# RSS: wake only when a new entry mentions security
+mb watch add https://example.com/feed.xml --kind rss \
+  --condition 'contains "security"' --every 15m
+
+# GitHub releases: owner/repo becomes https://github.com/owner/repo/releases.atom
+mb watch add golang/go --kind release --condition 'matches /^v1\./' --every 1h
+
+# JSON API: extract a path and compare a number
+mb watch add https://example.com/api/price --kind page --extract 'json:data.price' \
+  --condition '< 100' --every 10m
+
+mb watch list
+mb watch check all       # check now; prints only what fired
+mb watch logs            # fired/error/baseline events
+mb watch remove status
+mb watch run             # foreground loop for CI/systemd (Ctrl-C to stop)
+```
+
+A name is derived from the source and extraction when `--name` is omitted. Adding a watcher stores
+its first value as a baseline, so a page that is already "down" does not fire immediately; the
+condition fires on the **transition** into the condition. Feeds look at new entries only.
+
+### Conditions
+
+| Condition | Fires when |
+| --- | --- |
+| `changed` | the extracted value changes |
+| `contains "x"` | the value changes and now contains `x` (case-insensitive) |
+| `not-contains "x"` | the value changes and no longer contains `x` |
+| `matches /re/` | the value changes and the regex matches (flags `i`, `m`, `s`, `u`) |
+| `> 10` · `>= 10` · `< 5` · `<= 5` | the first number in the value crosses the threshold |
+| `== 0` · `!= 0` | numeric equality when both sides are numbers, otherwise case-insensitive text |
+
+Numeric comparisons read the first number, so `Price: 1,250.00 USD` compares as `1250`. `--extract`
+is `text` (default), `css:<selector>` (a small built-in selector engine: tag, `#id`, `.class`,
+`[attr]`, descendant/child/adjacent/sibling combinators, `:first-child`, `:last-child`,
+`:nth-child()`, `:not()`) or `json:<path>` (`data.items[0].price`, leading `$.` accepted).
+
+### Scheduling and state
+
+State lives in `~/.monad-browser/watches.json` (`MONAD_HOME` overrides it). Writes are atomic
+(temp file + rename), a corrupt file is moved to `watches.json.corrupt-<timestamp>` instead of
+crashing, and a per-watcher lease prevents the daemon and a foreground loop from checking the same
+watcher twice.
+
+The timer lives in the session daemon, so it survives between CLI calls. `mb watch add` starts a
+**watch-only** daemon when no session is warm: it does not launch Chrome until a browser command
+arrives. On Windows the same daemon is reached through its named pipe; there is no cron. Use
+`mb watch run` when you want the loop in the foreground (systemd, a container, CI).
+
+Network errors, timeouts, `429` and `5xx` are recorded and backed off as
+`every × 2^consecutiveErrors` (capped at 24h, or `Retry-After` when longer). A watcher never dies
+from a failed check; `mb watch list` and `mb watch logs` show the last error and the next attempt.
+
+### Output and JSON
+
+Text output is plain, has no ANSI escapes, and is identical on a TTY and a pipe; `NO_COLOR` needs
+nothing to disable. A fire prints the timestamp, source, a line diff (using the existing
+`diff.ts`), and the previous/next value. Nothing is printed when a condition does not fire.
+
+`--json` is the stable machine contract:
+
+```jsonc
+// mb watch list --json
+{ "watches": [ { "name": "…", "kind": "page", "source": "…", "extract": { "mode": "css", "selector": "#state" },
+  "condition": { "op": "changed" }, "everySeconds": 300, "every": "5m", "render": false,
+  "exec": false, "notify": false, "enabled": true, "createdAt": "…", "updatedAt": "…",
+  "lastCheckAt": "…", "nextCheckAt": "…", "lastError": null, "lastErrorAt": null,
+  "consecutiveErrors": 0, "lastFiredAt": "…", "totalFires": 1, "lastValue": "…" } ] }
+
+// mb watch add --json      -> { "watch": { … }, "check": { "type": "unchanged" | "error", … } }
+// mb watch check --json    -> { "checked": 2, "fired": [ … ], "errors": [ … ], "skipped": [] }
+// mb watch logs --json     -> { "events": [ { "name": "…", "at": "…", "kind": "fired", "summary": "…", "error": null } ] }
+// mb watch remove --json   -> { "removed": "…" }
+// mb watch run --json      -> one JSON object per line: { "type": "fired" | "error", … }
+```
+
+### Hooks
+
+Both hooks are off by default and run **only after a condition fires**:
+
+- `--exec '<command>'` runs the command without a shell (`spawn` with argv, quotes group
+  arguments; `;`, `|`, `$()` and backticks are literal). A timeout or non-zero exit is recorded in
+  `mb watch logs`; it does not stop the watcher.
+- `--notify` sends one HTTP POST to `MONAD_WATCH_NOTIFY_URL` (or `watchNotifyUrl` in
+  `monad-browser.json` / `~/.monad-browser/config.json`). The body is the fired diff; the `Title`
+  header is `watch: <name>`. This works with ntfy and similar services.
+
+`--render` opts a page watcher into Chrome for JavaScript-heavy pages; the check opens a throwaway
+tab and restores the tab that was active. It is the only watch path that needs Chrome.
 
 ## MCP server
 
@@ -458,6 +561,10 @@ A page opened and captured with `mb open` + `mb screenshot`:
 - **`diff` covers snapshots and URLs, not pixels.** `diff screenshot` is not implemented.
 - **`set device` ships a small preset table** (Desktop, iPhone 15/SE, Pixel 7, iPad); use
   `set viewport` for anything else.
+- **Watch CSS is a small built-in selector engine, not a full browser.** Tag, id, class, attribute,
+  descendant/child/adjacent/sibling combinators, `:first-child`, `:last-child`, `:nth-child()` and
+  `:not()` are supported; exotic pseudo-classes are not. `--render` uses Chrome when JS matters,
+  and the daemon (or `mb watch run`) must be alive for timers.
 - **Windows** runs on the Node launcher (the Go thin client is built for Linux/macOS); npm 12's
   default install-script policy is fine because `bin/mb` is a Node script that finds the packaged
   native binary itself. In PowerShell, quote a ref (`'@12'`) or use the plain number (`12`) — see
@@ -475,7 +582,7 @@ npm run test:matrix    # every command through bash/pwsh/cmd against real Chrome
 
 CI runs typecheck, build and unit + e2e tests on Ubuntu, macOS arm64 and macOS x64, plus Windows;
 the Windows job also runs `npm pack` and a global install with `--ignore-scripts`, then
-`mb --version` and `mb doctor`. A separate matrix job runs all 59 commands and 40 subcommands
+`mb --version` and `mb doctor`. A separate matrix job runs all 60 commands and 45 subcommands
 through bash, pwsh and cmd (cmd on Windows only) on Linux, Windows and macOS against real Chrome.
 The native Go client is vetted and built separately
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark harness is in
@@ -487,7 +594,8 @@ The native Go client is vetted and built separately
 **Alpha.** Done: daemon, CDP core, snapshot (incl. iframes), `run`, auto-wait, diff snapshots with
 revisions/JSON patches, `read`, targeted queries and semantic locators, form/file actions,
 annotated/change-only screenshots, cookies/storage/network, emulation, config/doctor/skills, MCP
-server, benchmarks. Next: Docker / E2B packaging, a Windows native client, pixel screenshot diffs.
+server, condition-gated page/RSS/release watchers, benchmarks. Next: Docker / E2B packaging, a
+Windows native client, pixel screenshot diffs.
 
 ## License
 

@@ -25,6 +25,7 @@ export type Config = {
   screenshotDir?: string;
   screenshotFormat?: "png" | "jpeg";
   screenshotQuality?: number;
+  watchNotifyUrl?: string;
 };
 
 function readJson(path: string, explicit: boolean): Config {
@@ -68,6 +69,7 @@ function readJson(path: string, explicit: boolean): Config {
   out.screenshotDir = str(parsed.screenshotDir);
   out.screenshotFormat = parsed.screenshotFormat === "jpeg" || parsed.screenshotFormat === "png" ? parsed.screenshotFormat : undefined;
   out.screenshotQuality = num(parsed.screenshotQuality);
+  out.watchNotifyUrl = str(parsed.watchNotifyUrl);
   return out;
 }
 
@@ -87,5 +89,6 @@ export function loadConfig(cwd = process.cwd(), explicit?: string): Config {
   if (env.MONAD_PROXY) cfg.proxy = env.MONAD_PROXY;
   if (env.MONAD_SCREENSHOT_DIR) cfg.screenshotDir = env.MONAD_SCREENSHOT_DIR;
   if (env.MONAD_DOWNLOAD_PATH) cfg.downloadPath = env.MONAD_DOWNLOAD_PATH;
+  if (env.MONAD_WATCH_NOTIFY_URL) cfg.watchNotifyUrl = env.MONAD_WATCH_NOTIFY_URL;
   return cfg;
 }

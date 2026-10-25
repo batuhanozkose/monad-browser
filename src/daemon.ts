@@ -5,6 +5,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } f
 import { join } from "node:path";
 import { Browser, type BrowserOptions } from "./browser.js";
 import { dispatch } from "./commands.js";
+import { hasEnabledWatches, startWatchScheduler } from "./watch.js";
 import { assertSession, stateDir, socketPath, type Request, type Response } from "./paths.js";
 
 export { stateDir, socketPath };
@@ -63,7 +64,7 @@ async function acquireSession(sock: string, pidFile: string): Promise<boolean> {
   return false;
 }
 
-export async function runDaemon(session: string, opts: BrowserOptions & { idleMinutes?: number }) {
+export async function runDaemon(session: string, opts: BrowserOptions & { idleMinutes?: number; watchOnly?: boolean }) {
   assertSession(session);
   mkdirSync(stateDir(), { recursive: true });
   const sock = socketPath(session);
@@ -84,11 +85,14 @@ export async function runDaemon(session: string, opts: BrowserOptions & { idleMi
   const browser = new Browser(opts);
   let server: Server | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
+  let scheduler: { stop(): void } | undefined;
+  let browserStarted = false;
   let closed = false;
 
   const shutdown = async (code = 0) => {
     if (closed) return;
     closed = true;
+    scheduler?.stop();
     server?.close();
     await browser.close().catch(() => {});
     cleanup();
@@ -98,11 +102,27 @@ export async function runDaemon(session: string, opts: BrowserOptions & { idleMi
   try {
     // A stale socket file from a killed daemon would make listen() fail on unix.
     if (process.platform !== "win32") { try { rmSync(sock, { force: true }); } catch { /* ignore */ } }
-    await browser.start();
     let queue: Promise<unknown> = Promise.resolve(); // commands run strictly in order
     const idleMs = (opts.idleMinutes ?? Number(process.env.MONAD_IDLE_MINUTES ?? 30)) * 60_000;
-    const bump = () => { if (idleTimer) clearTimeout(idleTimer); if (idleMs > 0) idleTimer = setTimeout(() => shutdown(0), idleMs); };
-    browser.cdp.on("__close", () => shutdown(1)); // browser died → daemon exits, next call relaunches
+    const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; } };
+    const scheduleIdle = () => {
+      if (closed || idleTimer || idleMs <= 0) return;
+      idleTimer = setTimeout(() => shutdown(0), idleMs);
+    };
+    // Watchers must outlive CLI calls: while one exists the daemon never idles out.
+    const bump = () => {
+      if (hasEnabledWatches()) { clearIdle(); return; }
+      clearIdle();
+      scheduleIdle();
+    };
+    const startBrowser = async () => {
+      if (browserStarted) return;
+      await browser.start();
+      browserStarted = true;
+      browser.cdp.on("__close", () => shutdown(1)); // browser died → daemon exits, next call relaunches
+      bump();
+    };
+    if (!opts.watchOnly) await startBrowser();
 
     const handle = (socket: Socket, line: string) => {
       let req: Request;
@@ -119,14 +139,21 @@ export async function runDaemon(session: string, opts: BrowserOptions & { idleMi
           socket.end(JSON.stringify({ ok: true, out: "ok stopped" }) + "\n");
           return shutdown(0);
         }
-        if (req.argv[0] === "status") res = { ok: true, out: `running session=${session} pid=${process.pid}\n${browser.listTabs()}` };
-        else {
-          try { res = { ok: true, out: await dispatch({ browser, cwd: req.cwd, signal: ac.signal }, req.argv) }; }
-          catch (e: any) { res = { ok: false, error: e?.message ?? String(e) }; }
+        if (req.argv[0] === "status") {
+          const out = browserStarted
+            ? `running session=${session} pid=${process.pid}\n${browser.listTabs()}`
+            : `running session=${session} pid=${process.pid} (watch-only; Chrome starts on the first browser command)`;
+          res = { ok: true, out };
+        } else {
+          try {
+            await startBrowser();
+            res = { ok: true, out: await dispatch({ browser, cwd: req.cwd, signal: ac.signal }, req.argv) };
+          } catch (e: any) { res = { ok: false, error: e?.message ?? String(e) }; }
         }
         res.ms = Date.now() - t0;
         if (socket.destroyed) return;
         socket.end(JSON.stringify(res) + "\n");
+        bump();
       });
     };
 
@@ -143,12 +170,26 @@ export async function runDaemon(session: string, opts: BrowserOptions & { idleMi
       server!.once("error", reject);
       server!.listen(sock, () => { server!.off("error", reject); resolve(); });
     });
+
+    // A render check must not interleave with a user command: it opens and closes a tab.
+    const exclusive = <T>(fn: () => Promise<T>): Promise<T> => {
+      const p = queue.then(fn);
+      queue = p.then(() => undefined, () => undefined);
+      return p;
+    };
+    scheduler = startWatchScheduler({
+      render: (url) => exclusive(async () => { await startBrowser(); return browser.renderHtml(url); }),
+      onTick: (active) => { if (active) clearIdle(); else scheduleIdle(); },
+      log: (message) => process.stderr.write(`watch: ${message}\n`),
+    });
+
     process.on("SIGTERM", () => shutdown(0));
     process.on("SIGINT", () => shutdown(0));
     if (process.platform === "win32") process.on("SIGBREAK", () => shutdown(0));
     bump();
     process.send?.("ready");
   } catch (e) {
+    scheduler?.stop();
     await browser.close().catch(() => {});
     cleanup();
     throw e;

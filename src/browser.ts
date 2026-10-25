@@ -1098,6 +1098,30 @@ export class Browser {
     return String(await this.callOn(await this.resolve(target), "function(){ return this.innerHTML ?? ''; }") ?? "");
   }
 
+  /**
+   * Render a URL in a throwaway tab and return its outer HTML, then restore the previous tab.
+   * Used by `--render` watchers so a background check never steals the user's active tab.
+   */
+  async renderHtml(url: string): Promise<string> {
+    const previous = this.current;
+    const tab = await this.newTab();
+    try {
+      await this.goto(url);
+      await this.networkIdle(300, 3000).catch(() => {});
+      const html = await this.evaluate("document.documentElement ? document.documentElement.outerHTML : ''");
+      return String(html ?? "");
+    } finally {
+      if (this.tabs.has(tab.targetId)) {
+        this.current = tab;
+        await this.closeTab().catch(() => {});
+      }
+      if (previous && this.tabs.has(previous.targetId)) {
+        this.current = previous;
+        await this.cdp.send("Target.activateTarget", { targetId: previous.targetId }).catch(() => {});
+      }
+    }
+  }
+
   async getValue(target: string) {
     return String(await this.callOn(await this.resolve(target), "function(){ return this.value ?? this.getAttribute('value') ?? ''; }") ?? "");
   }

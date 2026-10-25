@@ -67,8 +67,14 @@ if (cmdDir) process.on("exit", () => rmSync(cmdDir, { recursive: true, force: tr
 const SERVER = `
 const http = require("http"), fs = require("fs"), path = require("path");
 const dir = process.env.FIXTURES;
+let watchN = 0;
 const srv = http.createServer((q, r) => {
   const u = new URL(q.url, "http://x");
+  if (u.pathname === "/watch") {
+    r.setHeader("content-type", "text/html");
+    r.end("<html><body><main><h1>Watch</h1><p id=state>version " + (watchN++) + "</p></main></body></html>");
+    return;
+  }
   if (u.pathname === "/echo") {
     const body = JSON.stringify({ query: u.search, headers: q.headers });
     r.setHeader("content-type", "text/html");
@@ -636,6 +642,21 @@ async function scenario(r) {
   S("short flag cluster", "open", ["open", F("form.html"), "-is"], { out: /textbox "Name" @|\[textbox Name\]@/ });
   S("upload missing file", "upload", ["upload", "#f", join(cwd, "yok.txt")], { code: 1, err: /no such file/, emptyStdout: true });
 
+  // -- watch --------------------------------------------------------------------------------
+  S("watch add", "watch", ["watch", "add", F("watch"), "--kind", "page", "--extract", "text", "--condition", "changed", "--every", "1h", "--name", "matrix-watch"], {
+    sub: "watch add", out: /baseline set/,
+  });
+  S("watch list", "watch", ["watch", "list", "--json"], {
+    sub: "watch list", fn: (x) => r.check(JSON.parse(x.out).watches.some((w) => w.name === "matrix-watch"), `watch list missed matrix-watch:\n${x.out}`),
+  });
+  S("watch check", "watch", ["watch", "check", "matrix-watch", "--json"], {
+    sub: "watch check", fn: (x) => r.check(JSON.parse(x.out).fired.length === 1, `watch check did not fire:\n${x.out}`),
+  });
+  S("watch logs", "watch", ["watch", "logs", "matrix-watch", "--json"], {
+    sub: "watch logs", fn: (x) => r.check(JSON.parse(x.out).events.some((e) => e.kind === "fired"), `watch logs has no fire:\n${x.out}`),
+  });
+  S("watch remove", "watch", ["watch", "remove", "matrix-watch"], { sub: "watch remove", out: /ok removed/ });
+
   // -- cleanup ------------------------------------------------------------------------------
   S("stop --all", "stop", ["stop", "--all"]);
 }
@@ -684,6 +705,7 @@ const SUBCOMMANDS = [
   "diff snapshot", "diff url",
   "profiler start", "profiler stop", "trace start", "trace stop",
   "skills list", "skills get", "skills path", "install-skill --dir",
+  "watch add", "watch list", "watch check", "watch remove", "watch logs",
 ];
 
 test("matrix covers the whole command inventory", () => {

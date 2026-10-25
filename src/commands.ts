@@ -6,6 +6,7 @@ import { matchGlob, renderDiff } from "./diff.js";
 import { filterSections, htmlToText, outlineMarkdown } from "./read.js";
 import { DEFAULT_MAX_LINES } from "./snapshot.js";
 import { runScript, RUN_HELP } from "./run.js";
+import { WATCH_HELP, WATCH_USAGE } from "./watch-usage.js";
 
 export type Ctx = { browser: Browser; cwd: string; signal?: AbortSignal };
 type Flags = Record<string, string | boolean>;
@@ -34,7 +35,7 @@ const BOOL_FLAGS = new Set([
   "full", "interactive", "json", "no-snapshot", "snapshot", "headful", "diff", "submit", "cache",
   "annotate", "if-changed", "raw", "require-md", "outline", "abort", "landscape", "print-background",
   "mobile", "exact", "reduced-motion", "no-reduced-motion", "http-only", "secure", "clear", "new-tab",
-  "fix", "help", "all", "save", "load",
+  "fix", "help", "all", "save", "load", "render", "notify", "watch-only",
 ]);
 const SHORT: Record<string, string> = { i: "interactive", f: "full", s: "snapshot", d: "diff", b: "baseline" };
 
@@ -621,10 +622,12 @@ export const EXTRA_USAGE: Record<string, string> = {
   stop: "stop [--all]   stop the current session (or all)",
   status: "status   show the current session status",
   sessions: "sessions   list running sessions",
+  watch: WATCH_USAGE,
 };
 
 /** Usage for a command (including special-cased ones), so `<cmd> --help` never runs the command. */
 export function usageFor(name: string): string | undefined {
+  if (name === "watch") return WATCH_HELP;
   const usage = COMMANDS[name]?.usage ?? EXTRA_USAGE[name];
   return usage ? `usage: mb ${usage}` : undefined;
 }

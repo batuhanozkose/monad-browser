@@ -89,6 +89,7 @@ async function main() {
       autoDialog: flags["no-auto-dialog"] ? false : undefined,
       extraArgs: extraArgs.length ? extraArgs : undefined,
       idleMinutes: flags.idle !== undefined ? Number(flags.idle) : undefined,
+      watchOnly: !!flags["watch-only"],
     });
     return;
   }
@@ -110,6 +111,7 @@ async function main() {
   if (cfg.screenshotDir) process.env.MONAD_SCREENSHOT_DIR = cfg.screenshotDir;
   if (cfg.screenshotFormat) process.env.MONAD_SCREENSHOT_FORMAT = cfg.screenshotFormat;
   if (cfg.screenshotQuality !== undefined) process.env.MONAD_SCREENSHOT_QUALITY = String(cfg.screenshotQuality);
+  if (cfg.watchNotifyUrl) process.env.MONAD_WATCH_NOTIFY_URL = cfg.watchNotifyUrl;
 
   // Global options come before the command.
   let session = process.env.MONAD_SESSION || "default";
@@ -175,6 +177,25 @@ async function main() {
     }
   }
 
+  if (cmd === "watch") {
+    const { runWatchCommand } = await import("./watch-cli.js");
+    const result = await runWatchCommand(argv.slice(1), { cwd: process.cwd() });
+    if (result.out) process.stdout.write(result.out.endsWith("\n") ? result.out : result.out + "\n");
+    if (result.exitCode !== undefined) process.exitCode = result.exitCode;
+    if (result.startDaemon) {
+      try {
+        // Reuse a warm session; otherwise start a watch-only daemon (no Chrome until a browser
+        // command arrives). The scheduler must outlive this CLI process.
+        try { await request(session, ["status"], 2000); }
+        catch { await startDaemon(session, [...launch, "--watch-only"]); }
+      } catch (e: any) {
+        process.stderr.write(`warning: watcher saved but the scheduler did not start: ${e?.message ?? e}\n`);
+        process.exitCode = 1;
+      }
+    }
+    return;
+  }
+
   if (cmd === "mcp") { const { runMcp } = await import("./mcp.js"); await runMcp(session, launch); return; }
   if (cmd === "install-skill") { const { installSkill } = await import("./skill.js"); console.log(installSkill(argv.slice(1))); return; }
   if (cmd === "sessions") { console.log(await listSessions()); return; }
@@ -200,8 +221,10 @@ async function main() {
   let res;
   try { res = await request(session, argv, timeout); }
   catch (e) {
-    if (!notListening(e)) throw e;
+    // status/stop are lifecycle questions: a daemon that vanished between connect and write
+    // (EPIPE on an idle shutdown) is simply not running.
     if (cmd === "stop" || cmd === "status") { console.log(cmd === "stop" ? "not running" : "stopped"); return; }
+    if (!notListening(e)) throw e;
     await startDaemon(session, launch);
     res = await request(session, argv, timeout);
   }
