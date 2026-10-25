@@ -632,7 +632,7 @@ async function scenario(r) {
   // -- parser boundaries --------------------------------------------------------------------
   S("repeated flag", "snapshot", ["snapshot", "--max-text", "10", "--max-text", "20"]);
   S("flag with empty value", "snapshot", ["snapshot", "--max-text="]);
-  S("unknown flag", "snapshot", ["snapshot", "--not-a-flag"]);
+  S("unknown flag", "snapshot", ["snapshot", "--not-a-flag"], { code: 1, err: /unknown flag: --not-a-flag/, emptyStdout: true });
   S("short flag cluster", "open", ["open", F("form.html"), "-is"], { out: /textbox "Name" @|\[textbox Name\]@/ });
   S("upload missing file", "upload", ["upload", "#f", join(cwd, "yok.txt")], { code: 1, err: /no such file/, emptyStdout: true });
 

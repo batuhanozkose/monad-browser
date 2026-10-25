@@ -311,7 +311,11 @@ else PowerShell would interpret:
 | `C:\path\file.pdf` | unchanged | fine unquoted |
 
 `--` still ends flag parsing (`mb click -- -weird-id`), and `mb run --file plan.js` avoids inline
-quoting entirely. In `cmd.exe` nothing is rewritten, so `mb click @12 -s` works as written.
+quoting entirely. In `cmd.exe` nothing is rewritten, so `mb click @12 -s` works as written. cmd has
+its own traps: quote values containing `&` or `|` (`mb open "https://example.com/?a=1&b=2"`), write
+JSON as `--headers "{\"a\":\"b\"}"`, and prefer single quotes inside `run` scripts
+(`mb run "return 'a;b'"`) or `mb run --file plan.js` when a script mixes both quote styles or has
+newlines. Unknown `--flags` are rejected rather than silently ignored.
 
 ## Command reference
 

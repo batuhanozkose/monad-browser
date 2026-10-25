@@ -629,6 +629,19 @@ export function usageFor(name: string): string | undefined {
   return usage ? `usage: mb ${usage}` : undefined;
 }
 
+// A typo such as `--interactiv` used to be silently ignored. Collect every flag the CLI documents
+// (plus the few only the implementation uses) so dispatch can reject the rest.
+const KNOWN_FLAGS = new Set([
+  "interactive", "full", "snapshot", "diff", "baseline", "help",
+  "timeout", "file", "f", "props", "max", "name", "exact",
+  // Global launch options are only read before the command; after it they stay ignored, as before.
+  "session", "config", "cdp", "headful", "profile", "block", "chrome", "idle", "proxy", "headers",
+  "user-agent", "ignore-https-errors", "init-script", "download-path", "color-scheme", "viewport",
+  "extension", "args", "no-auto-dialog",
+]);
+for (const usage of [...Object.values(COMMANDS).map((c) => c.usage), ...Object.values(EXTRA_USAGE), RUN_HELP])
+  for (const m of usage.matchAll(/--([a-zA-Z][\w-]*)/g)) KNOWN_FLAGS.add(m[1]);
+
 export function helpText() {
   const seen = new Set<Cmd>();
   const lines = ["monad-browser — headless browser for agents", "", "usage: mb [--session NAME] <command> [args]", "", "commands:"];
@@ -646,5 +659,6 @@ export async function dispatch(ctx: Ctx, argv: string[]): Promise<string> {
   if (!cmd) throw new Error(`unknown command: ${name}\n\n${helpText()}`);
   const { args, flags } = parseArgs(rest);
   if (flags.help) return `usage: mb ${cmd.usage}`;
+  for (const k of Object.keys(flags)) if (!KNOWN_FLAGS.has(k)) throw new Error(`unknown flag: --${k}`);
   return cmd.run(ctx, args, flags);
 }

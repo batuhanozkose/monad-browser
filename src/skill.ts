@@ -70,7 +70,9 @@ before \`mb\` sees them: a bare \`@12\` is splatting and is dropped, so write
 \`mb click '@12' -s\` or, easier, \`mb click 12 -s\` — a plain number is the same ref. Quote CSS
 selectors and values PowerShell would rewrite: \`mb click '#email'\`, \`mb get count '*'\`,
 \`mb click 'text=Sign in'\`, \`mb eval 'return location.href'\`. \`cmd.exe\` passes \`@12\`
-through unchanged. Prefer \`mb run --file plan.js\` over inline scripts.
+through unchanged. Prefer \`mb run --file plan.js\` over inline scripts. In \`cmd.exe\` quote
+values containing \`&\` or \`|\`, write JSON with escaped quotes (see the README), and use single
+quotes inside \`run\` scripts or \`run --file\`. Unknown \`--flags\` are rejected.
 `;
 
 /** Skills shipped with the CLI, so an agent's instructions always match the installed version. */
