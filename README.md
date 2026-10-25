@@ -475,7 +475,7 @@ npm run test:matrix    # every command through bash/pwsh/cmd against real Chrome
 
 CI runs typecheck, build and unit + e2e tests on Ubuntu, macOS arm64 and macOS x64, plus Windows;
 the Windows job also runs `npm pack` and a global install with `--ignore-scripts`, then
-`mb --version` and `mb doctor`. A separate matrix job runs all 59 commands and 38 subcommands
+`mb --version` and `mb doctor`. A separate matrix job runs all 59 commands and 40 subcommands
 through bash, pwsh and cmd (cmd on Windows only) on Linux, Windows and macOS against real Chrome.
 The native Go client is vetted and built separately
 ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The benchmark harness is in
